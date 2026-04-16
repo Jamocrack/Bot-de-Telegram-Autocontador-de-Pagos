@@ -14,3 +14,6 @@ uvicorn==0.34.0
 
 # HTTP síncrono/asíncrono (llamadas a Telegram API desde FastAPI)
 httpx==0.28.1
+
+# Monitoreo de sistema (para el dashboard)
+psutil==5.9.8

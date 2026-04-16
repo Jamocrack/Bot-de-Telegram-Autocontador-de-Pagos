@@ -38,8 +38,26 @@
       <span class="text-2xl">🤖</span>
       <h1 class="text-xl font-bold italic" style="color: var(--tg-link)">Autocontador</h1>
     </div>
-    <button onclick="loadHistory()" class="px-3 py-1.5 rounded-lg text-sm font-medium" style="background: var(--tg-btn); color: var(--tg-btn-text)">Actualizar</button>
+    <div class="flex items-center gap-4">
+      <div id="status-badge" class="flex items-center gap-1.5 px-2 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/20">
+        <span class="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+        <span class="text-[10px] uppercase font-bold text-emerald-500">Online</span>
+      </div>
+      <button onclick="loadHistory(); loadStatus();" class="px-3 py-1.5 rounded-lg text-sm font-medium" style="background: var(--tg-btn); color: var(--tg-btn-text)">Actualizar</button>
+    </div>
   </header>
+
+  <!-- Server Stats (Mini) -->
+  <div class="flex gap-4 mb-4 px-1">
+    <div class="flex items-center gap-2">
+      <span class="text-[10px] text-slate-500 uppercase font-bold tracking-tighter">Uptime:</span>
+      <span id="uptime-val" class="text-[10px] font-mono text-sky-400">0h 0m 0s</span>
+    </div>
+    <div class="flex items-center gap-2">
+      <span class="text-[10px] text-slate-500 uppercase font-bold tracking-tighter">RAM:</span>
+      <span id="ram-val" class="text-[10px] font-mono text-emerald-400">0%</span>
+    </div>
+  </div>
 
   <!-- Stats -->
   <div class="grid grid-cols-2 gap-3 mb-6">
@@ -166,8 +184,26 @@
       setTimeout(() => modal.classList.add('hidden'), 200);
     }
 
+    async function loadStatus() {
+      try {
+        const res = await fetch('/api/status');
+        const data = await res.json();
+        document.getElementById('uptime-val').innerText = data.uptime;
+        document.getElementById('ram-val').innerText = data.memory.percent + '%';
+      } catch (e) {
+        document.getElementById('status-badge').innerHTML = `
+          <span class="w-2 h-2 rounded-full bg-red-500"></span>
+          <span class="text-[10px] uppercase font-bold text-red-500">Offline</span>
+        `;
+      }
+    }
+
     loadHistory();
-    setInterval(loadHistory, 30000);
+    loadStatus();
+    setInterval(() => {
+      loadHistory();
+      loadStatus();
+    }, 30000);
   </script>
 </body>
 </html>

@@ -15,8 +15,10 @@ Estrategia de datos:
 import json
 import os
 import re
+import time
 from pathlib import Path
 
+import psutil
 import httpx
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
@@ -105,6 +107,32 @@ async def get_history():
         "total": round(total, 2),
         "count": len(all_records)
     }
+
+
+@app.get("/api/status")
+async def get_status():
+    """
+    Devuelve información del estado del servidor (Docker/Sistema).
+    """
+    process = psutil.Process(os.get_pid()) if hasattr(os, "get_pid") else psutil.Process()
+    uptime_seconds = time.time() - process.create_time()
+    
+    return {
+        "status": "online",
+        "cpu_usage": psutil.cpu_percent(),
+        "memory": {
+            "percent": psutil.virtual_memory().percent,
+            "used_mb": round(psutil.virtual_memory().used / (1024 * 1024), 2)
+        },
+        "uptime": _fmt_seconds(uptime_seconds),
+        "bot_process": "active" # En Docker ambos corren en paralelo
+    }
+
+
+def _fmt_seconds(seconds: float) -> str:
+    mins, secs = divmod(int(seconds), 60)
+    hrs, mins = divmod(mins, 60)
+    return f"{hrs}h {mins}m {secs}s"
 
 
 # ---------------------------------------------------------------------------
