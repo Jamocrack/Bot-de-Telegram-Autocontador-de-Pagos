@@ -1,0 +1,16 @@
+[
+  {
+    "emisor": "Yape",
+    "pagador": "Julio Armando Marcelo Olaya",
+    "monto": 9.0,
+    "numero_operacion": null,
+    "fecha": "2026-04-12"
+  },
+  {
+    "emisor": "Yape",
+    "pagador": "Gloria Tum*",
+    "monto": 8.0,
+    "numero_operacion": "07226896",
+    "fecha": "2026-04-16"
+  }
+]

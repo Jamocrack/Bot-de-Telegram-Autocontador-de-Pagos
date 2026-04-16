@@ -1,0 +1,23 @@
+# Variables de entorno - NUNCA subir al repositorio
+.env
+
+# Imágenes descargadas temporalmente
+temp/
+
+# Logs
+logs/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+.venv_312/
+venv/
+*.egg-info/
+dist/
+build/
+
+# IDE
+.vscode/
+.idea/

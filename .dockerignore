@@ -1,0 +1,25 @@
+# ── Archivos sensibles ────────────────────────────────────────────────────────
+.env
+*.key
+*.pem
+
+# ── Python ────────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+
+# ── Runtime (no tiene sentido copiarlos a la imagen) ─────────────────────────
+temp/
+logs/
+history.json
+
+# ── Control de versiones ──────────────────────────────────────────────────────
+.git/
+.gitignore
+
+# ── IDE ───────────────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.DS_Store
