@@ -21,7 +21,8 @@ bot_telegram_autocontador/
 ├── requirements.txt
 ├── .env.example        # Plantilla de variables de entorno
 ├── temp/               # Imágenes temporales (se limpian automáticamente)
-└── history.json        # Generado al procesar el primer pago
+├── history.json        # Generado al procesar el primer pago
+└── ngrok.exe           # (Opcional) Para tunelizar el dashboard a HTTPS
 ```
 
 ---
@@ -44,6 +45,7 @@ cp .env.example .env
 TELEGRAM_TOKEN=7123456789:AAF...tu_token_aqui
 OPENROUTER_API_KEY=sk-or-v1-...tu_key_aqui
 GROUP_ID=-1001234567890
+WEBAPP_URL=https://xxxx.ngrok-free.app  # Obtén esta URL con ngrok
 ```
 
 > **Importante:** nunca subas `.env` a Git. Está incluido en `.gitignore` y `.dockerignore`.
@@ -115,8 +117,15 @@ cp .env.example .env
 python bot.py
 
 # 4b. Terminal 2 — Dashboard
-uvicorn main:app --reload --port 8000
+python -m uvicorn main:app --reload --port 8000
 ```
+
+### 🌐 Configuración de Acceso Público (Ngrok)
+Para usar el Dashboard como una **Telegram Mini App**, necesitas HTTPS:
+1. Descarga `ngrok.exe` y regístrate en [ngrok.com](https://ngrok.com).
+2. Agrega tu token: `.\ngrok config add-authtoken TU_TOKEN`
+3. Inicia el túnel: `.\ngrok http 8000`
+4. Copia la URL `https://...` a tu `.env` en `WEBAPP_URL`.
 
 Dashboard disponible en: **http://localhost:8000**
 
@@ -141,9 +150,10 @@ Usuario envía foto al grupo de Telegram
                 │
                 ▼
         main.py  /api/history  lee history.json
+                 /api/status   lee psutil (RAM/Uptime)
                 │
                 ▼
-        index.html  Dashboard (auto-refresh 30 s)
+        index.html  Dashboard con Monitoreo (Auto-refresh 30 s)
 ```
 
 ---
@@ -158,3 +168,4 @@ Usuario envía foto al grupo de Telegram
 | `fastapi` | 0.115.12 | Servidor web / API |
 | `uvicorn` | 0.34.0 | ASGI server |
 | `httpx` | 0.28.1 | HTTP async → Telegram API |
+| `psutil` | 5.9.8 | Monitoreo de sistema (RAM/CPU) |
