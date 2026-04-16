@@ -1,34 +1,34 @@
 """
-Bot de Telegram - Autocontador
-Recibe imágenes de comprobantes en grupos, las analiza con IA (OpenRouter)
-y publica los datos estructurados del pago en el mismo grupo.
+Bot de Telegram - Autocontador (Versión Local)
+Extrae datos con IA, guarda localmente y muestra dashboard en texto.
 """
 
+import asyncio
+import base64
+import hashlib
 import json
 import logging
 import os
-import hashlib
+import re
 from pathlib import Path
 
+import requests
 from dotenv import load_dotenv
 
-# Cargar .env ANTES de importar cualquier módulo propio que
-# valide variables de entorno a nivel de módulo (processor.py).
-load_dotenv()
-
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
+from telegram import Update
+from telegram.constants import ParseMode
 from telegram.ext import (
     Application,
-    MessageHandler,
     CommandHandler,
-    filters,
     ContextTypes,
+    MessageHandler,
+    filters,
 )
 
-from processor import extract_receipt_data
+load_dotenv()
 
 # ---------------------------------------------------------------------------
-# Configuración de logging
+# Configuración
 # ---------------------------------------------------------------------------
 logging.basicConfig(
     format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
@@ -36,289 +36,230 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
-# Variables de entorno
-# ---------------------------------------------------------------------------
 TELEGRAM_TOKEN: str = os.getenv("TELEGRAM_TOKEN", "")
-if not TELEGRAM_TOKEN:
-    raise ValueError(
-        "❌ No se encontró TELEGRAM_TOKEN en el archivo .env. "
-        "Por favor, configura la variable antes de ejecutar el bot."
-    )
+OPENROUTER_API_KEY: str = os.getenv("OPENROUTER_API_KEY", "")
+MODEL = os.getenv("MODEL_NAME", "google/gemini-2.0-flash-001")
 
-WEBAPP_URL: str = os.getenv("WEBAPP_URL", "")
-print(f"DEBUG: WEBAPP_URL cargada: '{WEBAPP_URL}'")
 
-# ---------------------------------------------------------------------------
-# Rutas de datos
-# ---------------------------------------------------------------------------
+if not TELEGRAM_TOKEN or not OPENROUTER_API_KEY:
+    raise ValueError("Falta configurar TELEGRAM_TOKEN u OPENROUTER_API_KEY en el archivo .env")
+
 TEMP_DIR = Path("temp")
 TEMP_DIR.mkdir(exist_ok=True)
-
-HISTORY_FILE = Path("history.json")
-
+PAGOS_FILE = Path("pagos.json")
 
 # ---------------------------------------------------------------------------
-# Handler: recepción de imágenes
+# Helpers JSON y Procesamiento
 # ---------------------------------------------------------------------------
-async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """
-    Se dispara cuando el bot recibe un mensaje con foto en el grupo.
-    Descarga la imagen, extrae los datos del comprobante con IA y
-    publica el resultado formateado en el grupo. Limpia el archivo temporal.
-    """
-    message = update.effective_message
-    chat = update.effective_chat
 
-    # Tomamos la foto de mayor resolución disponible (último elemento de la lista)
-    photo = message.photo[-1]
-    file_id = photo.file_id
-
-    # --- 1. Calcular Hash para evitar duplicados antes de procesar ---
-    # Nota: el file_id de Telegram puede cambiar, pero el contenido es el mismo.
-    # Usaremos una verificación rápida si ya tenemos el hash en memoria o historial.
-    
-    logger.info(
-        "📷 Imagen recibida | chat_id=%s | file_id=%s", chat.id, file_id
-    )
-
-    # --- 1. Descargar imagen al directorio temporal ---
-    dest_path = TEMP_DIR / f"{file_id}.jpg"
+def load_pagos() -> dict:
+    if not PAGOS_FILE.exists():
+        return {}
     try:
-        telegram_file = await context.bot.get_file(file_id)
-        await telegram_file.download_to_drive(dest_path)
-        
-        # Verificar hash del archivo recién descargado
-        file_hash = _calculate_hash(dest_path)
-        if _is_hash_duplicated(file_hash):
-            logger.info("⏭️  Imagen con hash %s ya procesada anteriormente.", file_hash)
-            await message.reply_text("⚠️ Este comprobante ya ha sido registrado anteriormente.")
-            dest_path.unlink(missing_ok=True)
-            return
-            
-        logger.info("✅ Imagen guardada y verificada: %s", dest_path)
-    except Exception as exc:
-        logger.exception("❌ Error al descargar la imagen de Telegram")
-        await message.reply_text(
-            "⚠️ No pude descargar la imagen. Por favor, inténtalo de nuevo."
-        )
-        return
-
-    # --- 2. Extraer datos del comprobante con IA ---
-    try:
-        data = await extract_receipt_data(dest_path)
-    except Exception as exc:
-        logger.exception("❌ Error inesperado al llamar a extract_receipt_data")
-        data = {"error": f"Error inesperado: {exc}"}
-    finally:
-        # --- 3. Borrar imagen temporal (siempre, sin importar el resultado) ---
-        try:
-            dest_path.unlink(missing_ok=True)
-            logger.info("🗑️  Imagen temporal eliminada: %s", dest_path)
-        except Exception:
-            logger.warning("⚠️  No se pudo eliminar el archivo temporal: %s", dest_path)
-
-    # --- 4. Publicar resultado en el grupo ---
-    if "error" in data:
-        logger.warning("⚠️  La IA devolvió un error: %s", data["error"])
-        await message.reply_text(
-            "⚠️ No pude extraer los datos del comprobante.\n"
-            "Asegúrate de que la imagen sea un recibo de pago legible."
-        )
-        return
-
-    datos_json = json.dumps(data, ensure_ascii=False, indent=2)
-
-    # --- 5. Persistir en history.json para el dashboard ---
-    data["image_hash"] = file_hash  # Guardamos el hash para futuras verificaciones
-    _append_to_history(data)
-
-    response_text = (
-        f"#REGISTRO_PAGO\n"
-        f"json\n"
-        f"{datos_json}\n"
-    )
-
-    await message.reply_text(response_text)
-    logger.info("📨 Datos enviados al grupo chat_id=%s", chat.id)
-
-
-# ---------------------------------------------------------------------------
-# Handler: documentos (imagen enviada como archivo = calidad original)
-# ---------------------------------------------------------------------------
-async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """
-    Acepta imágenes enviadas como documento (sin compresión JPEG de Telegram).
-    Preserva la calidad original de la captura de pantalla.
-    """
-    message = update.effective_message
-    doc = message.document
-
-    # Solo procesamos archivos que sean imágenes
-    if not doc.mime_type or not doc.mime_type.startswith("image/"):
-        return
-
-    logger.info("📎 Documento-imagen recibido | mime=%s | file_id=%s", doc.mime_type, doc.file_id)
-
-    # Inferir extensión según mime_type
-    ext_map = {"image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp"}
-    ext = ext_map.get(doc.mime_type, ".jpg")
-    dest_path = TEMP_DIR / f"{doc.file_id}{ext}"
-
-    try:
-        telegram_file = await context.bot.get_file(doc.file_id)
-        await telegram_file.download_to_drive(dest_path)
-        
-        # Verificar hash del documento recién descargado
-        file_hash = _calculate_hash(dest_path)
-        if _is_hash_duplicated(file_hash):
-            logger.info("⏭️  Documento con hash %s ya procesado anteriormente.", file_hash)
-            await message.reply_text("⚠️ Este comprobante ya ha sido registrado anteriormente.")
-            dest_path.unlink(missing_ok=True)
-            return
-            
-        logger.info("✅ Documento guardado y verificado: %s", dest_path)
+        data = json.loads(PAGOS_FILE.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            return {}
+        return data
     except Exception:
-        logger.exception("❌ Error al descargar el documento")
-        await message.reply_text("⚠️ No pude descargar la imagen. Inténtalo de nuevo.")
-        return
+        return {}
 
+
+def save_pagos(data: dict) -> None:
     try:
-        data = await extract_receipt_data(dest_path)
-    except Exception as exc:
-        logger.exception("❌ Error en extract_receipt_data (documento)")
-        data = {"error": f"Error inesperado: {exc}"}
+        PAGOS_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception as e:
+        logger.error("Error guardando datos: %s", e)
+
+
+def _calculate_hash(file_path: Path) -> str:
+    sha = hashlib.sha256()
+    with open(file_path, "rb") as f:
+        for chunk in iter(lambda: f.read(4096), b""):
+            sha.update(chunk)
+    return sha.hexdigest()
+
+
+def is_duplicate(user_id: str, image_hash: str, numero_operacion: str) -> bool:
+    data = load_pagos()
+    user_records = data.get(user_id, [])
+    
+    for r in user_records:
+        if image_hash and r.get("image_hash") == image_hash:
+            return True
+        if numero_operacion and str(r.get("numero_operacion", "")).strip().lower() == str(numero_operacion).strip().lower():
+            if str(numero_operacion).strip().lower() not in ["", "null", "none"]:
+                return True
+    return False
+
+
+def escape_markdown(text: str) -> str:
+    """Escapa caracteres especiales para MarkdownV2"""
+    characters = ['_', '*', '[', ']', '(', ')', '~', '`', '>', '#', '+', '-', '=', '|', '{', '}', '.', '!']
+    text = str(text)
+    for char in characters:
+        text = text.replace(char, f'\\{char}')
+    return text
+
+# ---------------------------------------------------------------------------
+# OpenRouter API Logic
+# ---------------------------------------------------------------------------
+
+SYSTEM_PROMPT = """
+Eres un experto leyendo comprobantes de pago peruanos (Yape, Plin, BCP, BBVA, etc.) o transferencias internacionales (Binance, Lemon).
+EXTRAE:
+  - emisor: banco o app DESDE la cual se envía el dinero.
+  - pagador: nombre completo.
+  - monto: SOLO el número decimal.
+  - numero_operacion: código o número único de transacción.
+  - fecha: YYYY-MM-DD.
+
+Si un campo no es legible, usa null. Responde SOLAMENTE con el JSON. Ejemplo:
+{"emisor": "Yape", "pagador": "Juan Perez", "monto": 25.50, "numero_operacion": "12345", "fecha": "2024-04-16"}
+"""
+
+def process_receipt_with_ai(image_path: Path) -> dict:
+    with open(image_path, "rb") as f:
+        img_b64 = base64.b64encode(f.read()).decode("utf-8")
+    
+    mime_type = "image/jpeg"
+    if image_path.suffix.lower() == ".png": 
+        mime_type = "image/png"
+    
+    payload = {
+        "model": MODEL,
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": SYSTEM_PROMPT},
+                    {"type": "image_url", "image_url": {"url": f"data:{mime_type};base64,{img_b64}"}}
+                ]
+            }
+        ],
+        "temperature": 0
+    }
+    headers = {
+        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+        "Content-Type": "application/json"
+    }
+
+    resp = requests.post("https://openrouter.ai/api/v1/chat/completions", json=payload, headers=headers, timeout=60)
+    resp.raise_for_status()
+    result = resp.json()
+    content = result["choices"][0]["message"]["content"].strip()
+    
+    # Extraer el JSON
+    match = re.search(r"\{.*?\}", content, re.DOTALL)
+    if match:
+        return json.loads(match.group(0))
+    return json.loads(content)
+
+
+# ---------------------------------------------------------------------------
+# Handlers del Bot
+# ---------------------------------------------------------------------------
+
+async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    message = update.effective_message
+    user_id = str(message.from_user.id)
+    
+    # Obtener archivo
+    if message.photo:
+        file_id = message.photo[-1].file_id
+        ext = ".jpg"
+    elif message.document and message.document.mime_type and message.document.mime_type.startswith("image/"):
+        file_id = message.document.file_id
+        ext = ".jpg" if "jpeg" in message.document.mime_type else ".png"
+    else:
+        return
+        
+    status_msg = await message.reply_text("⏳ Procesando...")
+
+    dest_path = TEMP_DIR / f"{file_id}{ext}"
+    try:
+        tg_file = await context.bot.get_file(file_id)
+        await tg_file.download_to_drive(dest_path)
+        
+        img_hash = _calculate_hash(dest_path)
+        if is_duplicate(user_id, img_hash, ""):
+            await status_msg.edit_text("⚠️ Este comprobante ya ha sido registrado antes (imagen duplicada).")
+            return
+            
+        # Llamar a requests en un hilo separado para no bloquear el loop de Telegram
+        data = await asyncio.to_thread(process_receipt_with_ai, dest_path)
+        op = data.get("numero_operacion")
+        
+        if op and is_duplicate(user_id, "", op):
+            await status_msg.edit_text(f"⚠️ El recibo con N° Operación: {op} ya fue registrado antes.")
+            return
+            
+        # Añadir Hash y Guardar
+        data["image_hash"] = img_hash
+        pagos = load_pagos()
+        if user_id not in pagos:
+            pagos[user_id] = []
+        pagos[user_id].append(data)
+        save_pagos(pagos)
+        
+        await status_msg.edit_text("✅ Pago registrado con éxito. Usa /dashboard para ver tu resumen.")
+            
+    except Exception:
+        logger.exception("Error al procesar.")
+        await status_msg.edit_text("❌ Ocurrió un error al procesar el comprobante. Verifica que la imagen sea legible.")
     finally:
         dest_path.unlink(missing_ok=True)
-        logger.info("🗑️  Archivo temporal eliminado: %s", dest_path)
-
-    if "error" in data:
-        await message.reply_text(
-            "⚠️ No pude extraer los datos del comprobante.\n"
-            "Asegúrate de que la imagen muestre claramente el monto y operación."
-        )
-        return
-
-    datos_json = json.dumps(data, ensure_ascii=False, indent=2)
-    data["image_hash"] = file_hash
-    _append_to_history(data)
-    await message.reply_text(f"#REGISTRO_PAGO\njson\n{datos_json}\n")
-    logger.info("📨 Datos de documento enviados al grupo chat_id=%s", message.chat.id)
 
 
-# ---------------------------------------------------------------------------
-# Handler: comando /dashboard — abre el Mini App de Telegram
-# ---------------------------------------------------------------------------
 async def dashboard_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """
-    Responde con un botón que abre el dashboard como Telegram Mini App.
-    Requiere WEBAPP_URL en el .env apuntando a una URL pública HTTPS.
-    """
-    if not WEBAPP_URL:
-        await update.effective_message.reply_text(
-            "⚠️ El dashboard no está configurado.\n"
-            "Agrega WEBAPP_URL en el archivo .env con la URL pública de tu servidor."
-        )
+    user_id = str(update.effective_message.from_user.id)
+    pagos = load_pagos()
+    user_records = pagos.get(user_id, [])
+    
+    if not user_records:
+        await update.effective_message.reply_text("📊 Aún no tienes comprobantes registrados.")
         return
 
-    keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton(text="📊 Abrir Mini App", web_app=WebAppInfo(url=WEBAPP_URL))],
-        [InlineKeyboardButton(text="🌐 Ver en Navegador", url=WEBAPP_URL)]
-    ])
-
-    await update.effective_message.reply_text(
-        "📊 *Dashboard de Pagos*\n\n"
-        "Puedes abrir la Mini App o usar el enlace directo:",
-        parse_mode="Markdown",
-        reply_markup=keyboard,
-    )
-    logger.info("🔗 Dashboard Mini App enviado a chat_id=%s", update.effective_chat.id)
-
-
-# ---------------------------------------------------------------------------
-# Persistencia local
-# ---------------------------------------------------------------------------
-def _append_to_history(record: dict) -> None:
-    """
-    Agrega un registro de pago al archivo history.json.
-    Si el archivo no existe, lo crea. Si el numero_operacion ya
-    existe no duplica el registro.
-    """
-    try:
-        history: list[dict] = []
-        if HISTORY_FILE.exists():
-            history = json.loads(HISTORY_FILE.read_text(encoding="utf-8"))
-            if not isinstance(history, list):
-                history = []
-
-        # Evitar duplicados por numero_operacion
-        op = record.get("numero_operacion")
-        if op and any(r.get("numero_operacion") == op for r in history):
-            logger.info("⏭️  Operación %s ya registrada, se omite duplicado.", op)
-            return
-
-        history.append(record)
-
-        # Guardar con formato legible y asegurar encoding UTF-8
-        with open(HISTORY_FILE, "w", encoding="utf-8") as f:
-            json.dump(history, f, ensure_ascii=False, indent=2)
+    totales_por_emisor = {}
+    gran_total = 0.0
+    
+    for r in user_records:
+        emisor = r.get("emisor")
+        emisor = str(emisor).strip().title() if emisor and str(emisor) != "null" else "Desconocido"
+        try:
+            monto = float(r.get("monto", 0))
+        except (ValueError, TypeError):
+            monto = 0.0
             
-        logger.info("💾 Registro guardado en history.json (total: %d)", len(history))
-    except Exception:
-        logger.exception("❌ No se pudo guardar en history.json")
+        totales_por_emisor[emisor] = totales_por_emisor.get(emisor, 0.0) + monto
+        gran_total += monto
+        
+    num_tx = len(user_records)
+    
+    # Construir MarkdownV2
+    texto_md = "*📊 DASHBOARD DE PAGOS*\n"
+    texto_md += "━━━━━━━━━━━━━━━━━━━━━━\n"
+    texto_md += f"📝 *Total de Transacciones:* {num_tx}\n\n"
+    texto_md += "*Resumen por Banco/App:*\n"
+    
+    for emisor, total in sorted(totales_por_emisor.items(), key=lambda x: x[1], reverse=True):
+        texto_md += f"🔹 {escape_markdown(emisor)}: S/ `{total:,.2f}`\n"
+        
+    texto_md += "━━━━━━━━━━━━━━━━━━━━━━\n"
+    texto_md += f"💰 *GRAN TOTAL:* S/ `{gran_total:,.2f}`\n"
+    
+    await update.effective_message.reply_text(texto_md, parse_mode=ParseMode.MARKDOWN_V2)
 
-
-def _calculate_hash(path: Path) -> str:
-    """Calcula el hash SHA256 de un archivo."""
-    sha256_hash = hashlib.sha256()
-    with open(path, "rb") as f:
-        for byte_block in iter(lambda: f.read(4096), b""):
-            sha256_hash.update(byte_block)
-    return sha256_hash.hexdigest()
-
-
-def _is_hash_duplicated(file_hash: str) -> bool:
-    """Verifica si el hash ya existe en el historial."""
-    if not HISTORY_FILE.exists():
-        return False
-    try:
-        history = json.loads(HISTORY_FILE.read_text(encoding="utf-8"))
-        return any(r.get("image_hash") == file_hash for r in history if isinstance(r, dict))
-    except Exception:
-        return False
-
-
-# ---------------------------------------------------------------------------
-# Punto de entrada principal
-# ---------------------------------------------------------------------------
 def main() -> None:
-    """Inicializa y arranca el bot en modo polling."""
-    logger.info("🚀 Iniciando bot...")
-
+    logger.info("🚀 Iniciando Autocontador Local...")
     app = Application.builder().token(TELEGRAM_TOKEN).build()
-
-    # Fotos enviadas normalmente (Telegram las comprime a JPEG)
-    app.add_handler(
-        MessageHandler(
-            filters.PHOTO & (filters.ChatType.GROUP | filters.ChatType.SUPERGROUP),
-            handle_image,
-        )
-    )
-
-    # Imágenes enviadas como archivo (calidad original, sin compresión)
-    app.add_handler(
-        MessageHandler(
-            filters.Document.IMAGE & (filters.ChatType.GROUP | filters.ChatType.SUPERGROUP),
-            handle_document,
-        )
-    )
-
-    # Comando /dashboard en grupos o chats privados
+    
     app.add_handler(CommandHandler("dashboard", dashboard_command))
-
-    logger.info("🤖 Bot activo. Esperando mensajes...")
-    app.run_polling(allowed_updates=Update.ALL_TYPES)
-
+    
+    # Escucha imágenes en cualquier grupo o chat privado
+    app.add_handler(MessageHandler(filters.PHOTO | filters.Document.IMAGE, handle_media))
+    
+    logger.info("🤖 Bot activo...")
+    app.run_polling()
 
 if __name__ == "__main__":
     main()

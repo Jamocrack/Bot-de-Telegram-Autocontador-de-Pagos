@@ -1,19 +1,9 @@
-# ── Dependencias de producción ────────────────────────────────────────────────
+# ── Dependencias de Producción ────────────────────────────────────────────────
 # Bot de Telegram
 python-telegram-bot==21.9
 
+# Peticiones HTTP sincrónicas para OpenRouter
+requests==2.32.3
+
 # Variables de entorno
 python-dotenv==1.0.1
-
-# HTTP asíncrono (llamadas a OpenRouter desde el bot)
-aiohttp==3.10.11
-
-# Servidor web — API + dashboard
-fastapi==0.115.12
-uvicorn==0.34.0
-
-# HTTP síncrono/asíncrono (llamadas a Telegram API desde FastAPI)
-httpx==0.28.1
-
-# Monitoreo de sistema (para el dashboard)
-psutil==5.9.8
