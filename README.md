@@ -39,8 +39,37 @@ MODEL_NAME=google/gemini-2.0-flash-001
 
 # --- Administración ---
 # Tu ID de Telegram para habilitar el Dashboard Maestro
-ADMIN_USER_ID=tu_id_aqui
+ADMIN_USER_ID=tu_id_personal_aqui
 ```
+
+---
+
+## 🔑 Cómo obtener tus credenciales
+
+Para que el bot funcione, necesitas llenar los valores en el archivo `.env`. Aquí te explicamos cómo conseguirlos:
+
+### 1. Token de Telegram (`TELEGRAM_TOKEN`)
+1. Habla con [@BotFather](https://t.me/BotFather) en Telegram.
+2. Envía el comando `/newbot` y sigue las instrucciones para darle un nombre.
+3. Al finalizar, te dará un **API Token**. Cópialo y pégalo en el `.env`.
+
+### 2. Tu ID de Telegram (`ADMIN_USER_ID`)
+Este es tu número de identidad único en Telegram (necesario para ser el Administrador):
+1. Escribe a [@userinfobot](https://t.me/userinfobot) y pulsa "Inicio".
+2. Te responderá con tu **Id** (un número largo). Úsalo en `ADMIN_USER_ID`.
+
+### 3. IDs de Grupos Autorizados (`AUTHORIZED_CHATS`)
+El bot solo responderá en los chats que pongas aquí.
+- **Para Chats Privados:** Es el mismo que tu ID personal.
+- **Para Grupos:** Agrega a [@userinfobot](https://t.me/userinfobot) a tu grupo y te dirá el ID del grupo (suele empezar con `-100`).
+- *Tip:* Puedes poner varios separados por comas.
+
+### 4. API Key de IA (`OPENROUTER_API_KEY`)
+1. Crea una cuenta en [OpenRouter.ai](https://openrouter.ai/).
+2. Ve a la sección de [Keys](https://openrouter.ai/keys) y genera una nueva clave.
+3. Asegúrate de tener créditos en tu cuenta para que la IA (Gemini) pueda procesar las imágenes.
+
+---
 
 ### 3. Ejecución
 - **Windows:** Ejecuta el archivo `ejecutar_bot.bat`.
