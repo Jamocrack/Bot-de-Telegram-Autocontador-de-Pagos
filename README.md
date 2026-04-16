@@ -1,171 +1,60 @@
-# 🤖 Bot Telegram Autocontador
+# 🤖 Autocontador Elite - Asistente Financiero para Telegram
 
-Bot de Telegram que recibe comprobantes de pago como imágenes en un grupo,
-extrae los datos con IA (Google Gemini via OpenRouter) y los expone en un
-dashboard web en tiempo real.
+Este es un bot de Telegram profesional diseñado para el seguimiento inteligente de ingresos y comprobantes de pago (Yape, Plin, PayPal, bancos internacionales, Binance, Lemon, etc.) utilizando **Inteligencia Artificial (Gemini 2.0 Flash)**. 
 
----
+El sistema funciona de forma **100% local, privada y sin necesidad de servidores web**, convirtiéndose en la herramienta definitiva de contabilidad personal.
 
-## 📁 Estructura del proyecto
+## 🌟 Características de Nivel Elite
 
-```
-bot_telegram_autocontador/
-├── bot.py              # Bot de Telegram (recibe fotos, llama a la IA)
-├── processor.py        # Extracción de datos con OpenRouter / Gemini Flash
-├── main.py             # Servidor FastAPI (dashboard + /api/history)
-├── start.sh            # Arranca bot + servidor en paralelo (usado por Docker)
-├── static/
-│   └── index.html      # Dashboard con TailwindCSS
-├── Dockerfile          # Imagen de producción
-├── .dockerignore
-├── requirements.txt
-├── .env.example        # Plantilla de variables de entorno
-├── temp/               # Imágenes temporales (se limpian automáticamente)
-├── history.json        # Generado al procesar el primer pago
-└── ngrok.exe           # (Opcional) Para tunelizar el dashboard a HTTPS
-```
+- **🎮 Navegación Instantánea:** Dashboard y menús interactivos que funcionan editando el mismo mensaje, eliminando el desorden del chat.
+- **🌍 IA Internacional:** Reconoce pagos de cualquier país y entidad (PayPal, Binance, Lemon, Bancos locales).
+- **💱 Soporte Multi-moneda:** Detecta Soles, Dólares, Euros y USDT, con conversión automática a Soles en tiempo real.
+- **🛡️ Seguridad por "Lista Blanca":** Tú decides en qué grupos puede trabajar el bot, protegiendo tu uso de la IA.
+- **👑 Resumen General de Admin:** El dueño del bot tiene un botón especial para ver las estadísticas globales de todos los usuarios.
+- **🧹 Sistema de Chat Limpio:** Borra automáticamente mensajes de error o estados temporales para mantener tus grupos impecables.
+- **📊 Gestión Total:** Buscador integrado, reportes por categoría y exportación a CSV compatible con Excel.
 
 ---
 
-## ⚙️ Configuración del archivo `.env`
+## 🚀 Guía de Instalación Rápida
 
-Copia la plantilla y rellena los valores reales:
-
+### 1. Preparación del Sistema
+Asegúrate de tener **Python 3.10+** instalado. Descarga el repositorio y en una terminal ejecuta:
 ```bash
-cp .env.example .env
+pip install -r requirements.txt
 ```
 
-| Variable            | Dónde obtenerla |
-|---------------------|-----------------|
-| `TELEGRAM_TOKEN`    | Habla con [@BotFather](https://t.me/BotFather) → `/newbot` |
-| `OPENROUTER_API_KEY`| [openrouter.ai/keys](https://openrouter.ai/keys) → Create Key |
-| `GROUP_ID`          | Añade [@userinfobot](https://t.me/userinfobot) al grupo → `/start` (número negativo) |
+### 2. Configuración del Entorno (`.env`)
+Crea un archivo llamado `.env` en la raíz del proyecto y rellénalo con tus credenciales:
 
 ```env
-TELEGRAM_TOKEN=7123456789:AAF...tu_token_aqui
-OPENROUTER_API_KEY=sk-or-v1-...tu_key_aqui
-GROUP_ID=-1001234567890
-WEBAPP_URL=https://xxxx.ngrok-free.app  # Obtén esta URL con ngrok
+# --- Credenciales de Telegram ---
+TELEGRAM_TOKEN=tu_token_aqui
+# Chats autorizados para usar el bot (separados por coma)
+AUTHORIZED_CHATS=-100123456789, 987654321
+
+# --- Inteligencia Artificial ---
+OPENROUTER_API_KEY=tu_key_aqui
+MODEL_NAME=google/gemini-2.0-flash-001
+
+# --- Administración ---
+# Tu ID de Telegram para habilitar el Dashboard Maestro
+ADMIN_USER_ID=tu_id_aqui
 ```
 
-> **Importante:** nunca subas `.env` a Git. Está incluido en `.gitignore` y `.dockerignore`.
-
-### Configuración del bot en Telegram
-
-1. En BotFather: `/mybots` → tu bot → **Bot Settings** → **Group Privacy** → **Turn off**
-   (necesario para que el bot lea imágenes en el grupo).
-2. Agrega el bot al grupo como **administrador** (o al menos con permisos para leer mensajes).
+### 3. Ejecución
+- **Windows:** Ejecuta el archivo `ejecutar_bot.bat`.
+- **Manual:** Ejecuta `python bot.py`.
 
 ---
 
-## 🐳 Ejecución con Docker (recomendado)
+## 🛠️ Comandos Dinámicos
 
-### 1. Construir la imagen
-
-```bash
-docker build -t autocontador .
-```
-
-### 2. Ejecutar el contenedor
-
-```bash
-docker run -d \
-  --name autocontador \
-  --env-file .env \
-  -p 8000:8000 \
-  -v "$(pwd)/history.json:/app/history.json" \
-  --restart unless-stopped \
-  autocontador
-```
-
-| Flag | Propósito |
-|------|-----------|
-| `--env-file .env` | Inyecta las variables de entorno |
-| `-p 8000:8000` | Expone el dashboard en `http://localhost:8000` |
-| `-v history.json` | Persiste el historial **fuera** del contenedor |
-| `--restart` | Reinicia automáticamente si el proceso cae |
-
-### 3. Ver logs en tiempo real
-
-```bash
-docker logs -f autocontador
-```
-
-### 4. Detener
-
-```bash
-docker stop autocontador
-```
+- `/commands`: Abre el **Centro de Comandos Interactivo** con botones.
+- `/dashboard`: Panel de control para ver estadísticas, exportar datos o borrar registros.
+- `/buscar [texto]`: Encuentra transacciones específicas por nombre o monto.
+- `/consultar [persona/categoría]`: Reportes inteligentes y sumatorias instantáneas.
 
 ---
 
-## 💻 Ejecución local (sin Docker)
-
-```bash
-# 1. Entorno virtual
-python -m venv .venv
-source .venv/bin/activate      # Linux/macOS
-.venv\Scripts\activate         # Windows
-
-# 2. Instalar dependencias
-pip install -r requirements.txt
-
-# 3. Configurar .env (ver sección anterior)
-cp .env.example .env
-
-# 4a. Terminal 1 — Bot
-python bot.py
-
-# 4b. Terminal 2 — Dashboard
-python -m uvicorn main:app --reload --port 8000
-```
-
-### 🌐 Configuración de Acceso Público (Ngrok)
-Para usar el Dashboard como una **Telegram Mini App**, necesitas HTTPS:
-1. Descarga `ngrok.exe` y regístrate en [ngrok.com](https://ngrok.com).
-2. Agrega tu token: `.\ngrok config add-authtoken TU_TOKEN`
-3. Inicia el túnel: `.\ngrok http 8000`
-4. Copia la URL `https://...` a tu `.env` en `WEBAPP_URL`.
-
-Dashboard disponible en: **http://localhost:8000**
-
----
-
-## 🔄 Flujo completo
-
-```
-Usuario envía foto al grupo de Telegram
-        │
-        ▼
-    bot.py  descarga imagen → /temp/
-        │
-        ▼
- processor.py  codifica en Base64 → POST a OpenRouter (Gemini Flash 1.5)
-        │
-        ▼
-    IA devuelve JSON:  { emisor, monto, numero_operacion, fecha }
-        │
-        ├─→  bot.py publica  #REGISTRO_PAGO + JSON en el grupo
-        └─→  history.json  (agrega registro, sin duplicados)
-                │
-                ▼
-        main.py  /api/history  lee history.json
-                 /api/status   lee psutil (RAM/Uptime)
-                │
-                ▼
-        index.html  Dashboard con Monitoreo (Auto-refresh 30 s)
-```
-
----
-
-## 🛠️ Dependencias
-
-| Paquete | Versión | Uso |
-|---------|---------|-----|
-| `python-telegram-bot` | 21.9 | Bot API v20+ |
-| `python-dotenv` | 1.0.1 | Variables de entorno |
-| `aiohttp` | 3.10.11 | HTTP async → OpenRouter |
-| `fastapi` | 0.115.12 | Servidor web / API |
-| `uvicorn` | 0.34.0 | ASGI server |
-| `httpx` | 0.28.1 | HTTP async → Telegram API |
-| `psutil` | 5.9.8 | Monitoreo de sistema (RAM/CPU) |
+**Diseñado para ser potente, ligero y 100% privado.**

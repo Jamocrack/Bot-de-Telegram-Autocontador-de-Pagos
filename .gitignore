@@ -1,7 +1,7 @@
 # Variables de entorno - NUNCA subir al repositorio
 .env
 
-# Imágenes descargadas temporalmente
+# Carpeta de archivos procesados
 temp/
 
 # Logs

@@ -1,0 +1,90 @@
+{
+  "2110276922": [
+    {
+      "emisor": "Yape",
+      "pagador": "Julio Armando Marcelo Olaya",
+      "monto": 9.0,
+      "moneda": "Soles",
+      "pais": "Peru",
+      "numero_operacion": null,
+      "fecha": "2026-04-12",
+      "hora": "06:57:00",
+      "destino": null,
+      "categoria": "Deposito",
+      "referencia": null,
+      "image_hash": "544e936fdf125b950c7f539a76419ecf64885e4b7d96ba8e0656c47fb65ddfc7"
+    }
+  ],
+  "8480057157": [
+    {
+      "emisor": "Yape",
+      "pagador": "Lyndsay Lop*",
+      "monto": 12.0,
+      "moneda": "Soles",
+      "pais": "Peru",
+      "numero_operacion": "09995382",
+      "fecha": "2026-04-10",
+      "hora": "11:50:00",
+      "destino": "Yape",
+      "categoria": null,
+      "referencia": null,
+      "image_hash": "df780a477bb0a47815b20759becf28f565dcf416358202bfb6a251484b4d2e61"
+    },
+    {
+      "emisor": "Yape",
+      "pagador": "Lyndsay Lop*",
+      "monto": 15.0,
+      "moneda": "Soles",
+      "pais": "Peru",
+      "numero_operacion": "28015367",
+      "fecha": "2026-04-10",
+      "hora": "20:06:00",
+      "destino": "Yape",
+      "categoria": null,
+      "referencia": null,
+      "image_hash": "e37d9d866e0dfeaf93c78875d1963bdece55af60bf88102ecc4baa91dbd8aaab"
+    },
+    {
+      "emisor": "Yape",
+      "pagador": "Lyndsay Lop*",
+      "monto": 15.0,
+      "moneda": "Soles",
+      "pais": "Peru",
+      "numero_operacion": "27323513",
+      "fecha": "2026-04-12",
+      "hora": "22:11:00",
+      "destino": "Yape",
+      "categoria": null,
+      "referencia": null,
+      "image_hash": "c54093e4a0532b6fe86945120df75fcdb153f7691ed05a6d00a42198354b5f43"
+    },
+    {
+      "emisor": "Yape",
+      "pagador": "Lyndsay Lop*",
+      "monto": 6.0,
+      "moneda": "Soles",
+      "pais": "Peru",
+      "numero_operacion": "10019588",
+      "fecha": "2026-04-15",
+      "hora": "10:25:00",
+      "destino": "Yape",
+      "categoria": null,
+      "referencia": null,
+      "image_hash": "741a6a2db4da9832b4e22d4bab0d0555fdcb7f3c2deff9e8c0775e918429c941"
+    },
+    {
+      "emisor": "Yape",
+      "pagador": "Lyndsay Lop*",
+      "monto": 9.0,
+      "moneda": "Soles",
+      "pais": "Peru",
+      "numero_operacion": "30720141",
+      "fecha": "2026-04-07",
+      "hora": "21:01:00",
+      "destino": "Yape",
+      "categoria": null,
+      "referencia": null,
+      "image_hash": "4d1db6d98ada79be32a709da8af5d365821d160ca68d415bdd7a3711688d90c3"
+    }
+  ]
+}
