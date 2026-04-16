@@ -200,3 +200,7 @@ def _extract_json_from_text(text: str) -> dict | None:
         except json.JSONDecodeError:
             pass
     return None
+
+if __name__ == '__main__':
+    import uvicorn
+    uvicorn.run(app, host='0.0.0.0', port=8000)

@@ -12,5 +12,12 @@
     "monto": 8.0,
     "numero_operacion": "07226896",
     "fecha": "2026-04-16"
+  },
+  {
+    "emisor": "YAPE",
+    "pagador": "Julio Armando Marcelo Olaya",
+    "monto": 9.0,
+    "numero_operacion": null,
+    "fecha": "2026-04-12"
   }
 ]
