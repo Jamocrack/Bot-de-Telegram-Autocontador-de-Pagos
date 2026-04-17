@@ -89,9 +89,12 @@ El bot solo responderá en los chats que pongas aquí.
 - `/recibo [op]`: Devuelve al momento la foto original alojada en la nube si tienes el número de la operación (OP).
 - `/buscar_admin [texto]`: (Privilegiado) Búsqueda cruzada y definitiva, con lectura inteligente de usuarios (`@usuario`).
 
-💡 **Mejoras Inteligentes Incluidas:** 
-1. **Notas al instante:** Si adjuntas un texto/pie de foto (_caption_) al momento de mandar tu captura de pago en Telegram, el bot fusionará tu mensaje con el análisis y lo guardará como nota o referencia.
-2. **Sistema Anti-fallos (SYS-IDs):** En caso la foto esté en mal estado y la Inteligencia Artificial sea incapaz de hallar el N° de Operación de la transferencia, el bot generará un código propio infalible (`SYS-XXXX`) garantizando que jamás se quede un papel fuera del sistema.
+💡 **Mejoras de Nivel Elite Recientes:** 
+1. **Notas al instante:** Si adjuntas un texto/pie de foto (_caption_) al mandar tu pago, se fusionará con el análisis de la IA automáticamente.
+2. **Sistema Anti-fallos (SYS-IDs):** Generación automática de códigos únicos para recibos con datos borrosos o ilegibles.
+3. **🗑️ Borrado Selectivo:** Los usuarios pueden elegir exactamente qué recibo eliminar de una lista visual de los últimos 10 movimientos desde el Dashboard.
+4. **👑 Auditoría y Gestión Maestro:** El administrador tiene acceso a un log de eliminaciones y puede borrar cualquier registro del sistema mediante el comando `/borrar_op` o el botón interactivo de borrado por operación.
+5. **🛡️ Soporte Python 3.12/3.14:** Arquitectura optimizada para las versiones más recientes de Python y Windows.
 
 ---
 

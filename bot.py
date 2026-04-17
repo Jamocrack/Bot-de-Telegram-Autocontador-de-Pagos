@@ -57,6 +57,7 @@ TEMP_DIR = Path("temp")
 TEMP_DIR.mkdir(exist_ok=True)
 PAGOS_FILE = Path("pagos.json")
 SETTINGS_FILE = Path("settings.json")
+ELIMINADOS_FILE = Path("eliminados.json")
 
 # ---------------------------------------------------------------------------
 # Helpers JSON y Procesamiento
@@ -136,6 +137,29 @@ def escape_markdown(text: str) -> str:
     for char in characters:
         text = text.replace(char, f'\\{char}')
     return text
+
+def log_deletion(original_user_id: str, record: dict, deleted_by_id: str):
+    """Guarda rastro de qué se borró, quién lo hizo y los datos originales."""
+    logs = []
+    if ELIMINADOS_FILE.exists():
+        try: logs = json.loads(ELIMINADOS_FILE.read_text(encoding="utf-8"))
+        except: pass
+    
+    entry = {
+        "fecha_borrado": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "borrado_por": deleted_by_id,
+        "usuario_original": original_user_id,
+        "username_original": record.get("_username", "N/A"),
+        "datos_pago": {
+            "monto": record.get("monto"),
+            "emisor": record.get("emisor"),
+            "op": record.get("numero_operacion"),
+            "pagador": record.get("pagador")
+        }
+    }
+    logs.append(entry)
+    ELIMINADOS_FILE.write_text(json.dumps(logs, ensure_ascii=False, indent=2), encoding="utf-8")
+
 
 # ---------------------------------------------------------------------------
 # OpenRouter API Logic
@@ -373,6 +397,7 @@ async def dashboard_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             InlineKeyboardButton("🖼️ Ver Recibo", callback_data="dash_ver_recibo_menu"),
         ],
         [
+            InlineKeyboardButton("🗑️ Eliminar Pagos", callback_data="dash_delete_conf"),
             InlineKeyboardButton("❌ Cerrar", callback_data="dash_close")
         ]
     ]
@@ -407,9 +432,12 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     pagos = load_pagos()
     user_records = pagos.get(user_id, [])
 
-    if not user_records and data != "dash_help":
-        await query.edit_message_text("📊 Aún no tienes datos registrados. ¡Envíame una foto para empezar!")
-        return
+    if not user_records:
+        # Permitir que el admin vea sus cosas y el usuario vea ayuda/cierre aunque no tengan pagos
+        is_admin_data = data.startswith("dash_admin_")
+        if data not in ["dash_help", "dash_menu", "dash_close", "dash_commands", "dash_admin_menu"] and not is_admin_data:
+            await query.edit_message_text("📊 Aún no tienes datos registrados. ¡Envíame una foto para empezar!")
+            return
 
     if data == "dash_resumen":
         await _show_resumen(query, user_records)
@@ -442,11 +470,27 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             reply_markup=ForceReply(selective=True)
         )
     elif data == "dash_delete_conf":
-        await _show_delete_confirmation(query)
-    elif data == "dash_delete_now":
-        await _delete_last_record(query, user_id)
-    elif data == "dash_admin_global":
-        await _show_admin_global(query)
+        recientes = list(enumerate(user_records))[-10:][::-1]
+        keyboard = []
+        for idx, r in recientes:
+            e = str(r.get("emisor", ""))[:10]
+            m = float(r.get("monto", 0) or 0)
+            btn_txt = f"🗑️ {e} | S/ {m:.2f} | {r.get('fecha','')}"
+            keyboard.append([InlineKeyboardButton(btn_txt, callback_data=f"dash_del_spec_{idx}")])
+        
+        keyboard.append([InlineKeyboardButton("🔙 Volver", callback_data="dash_menu")])
+        txt = "🗑️ *ELIMINACIÓN SELECTIVA*\nSelecciona exactamente qué pago deseas borrar:"
+        await query.edit_message_text(txt, parse_mode=ParseMode.MARKDOWN_V2, reply_markup=InlineKeyboardMarkup(keyboard))
+    elif data.startswith("dash_del_spec_"):
+        try:
+            idx = int(data.replace("dash_del_spec_", ""))
+            if 0 <= idx < len(user_records):
+                eliminado = user_records.pop(idx)
+                save_pagos(pagos)
+                log_deletion(user_id, eliminado, user_id)
+                await query.answer(f"✅ Borrado: S/ {eliminado.get('monto')}", show_alert=True)
+        except: pass
+        await dashboard_command(update, context)
     elif data == "dash_admin_search_info":
         if not ADMIN_USER_ID or user_id != str(ADMIN_USER_ID): return
         from telegram import ForceReply
@@ -456,6 +500,32 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             parse_mode=ParseMode.MARKDOWN_V2,
             reply_markup=ForceReply(selective=True)
         )
+    elif data == "dash_admin_global":
+        await _show_admin_global(query)
+    elif data == "dash_admin_del_op_prompt":
+        if not ADMIN_USER_ID or user_id != str(ADMIN_USER_ID): return
+        from telegram import ForceReply
+        await context.bot.send_message(
+            chat_id=query.message.chat_id,
+            text="🚫 *BORRADO MAESTRO*\nResponde a este mensaje con el NÚMERO DE OPERACIÓN que deseas eliminar de la DB global:",
+            parse_mode=ParseMode.MARKDOWN_V2,
+            reply_markup=ForceReply(selective=True)
+        )
+    elif data == "dash_admin_show_logs":
+        if not ADMIN_USER_ID or user_id != str(ADMIN_USER_ID): return
+        if not ELIMINADOS_FILE.exists():
+            await query.answer("No hay logs aún.", show_alert=True)
+            return
+        logs = json.loads(ELIMINADOS_FILE.read_text(encoding="utf-8"))[-10:][::-1]
+        txt = "🗑️ *HISTORIAL DE ELIMINACIONES*\n━━━━━━━━━━━━━━━━━━━━━━\n"
+        for l in logs:
+            fecha = escape_markdown(l.get("fecha_borrado", ""))
+            u = escape_markdown(l.get("username_original", "S/N"))
+            m = l.get("datos_pago", {}).get("monto", 0)
+            txt += f"• `{fecha}` | @{u}\n  └ S/ `{m}` borrado por {l.get('borrado_por')[:6]}...\n"
+        
+        keyboard = [[InlineKeyboardButton("🔙 Volver", callback_data="dash_admin_global")]]
+        await query.edit_message_text(txt, parse_mode=ParseMode.MARKDOWN_V2, reply_markup=InlineKeyboardMarkup(keyboard))
     elif data == "dash_admin_toggle_status":
         if not ADMIN_USER_ID or user_id != str(ADMIN_USER_ID): return
         settings = load_settings()
@@ -502,6 +572,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 InlineKeyboardButton("👑 Búsqueda Global", callback_data="dash_admin_search_info")
             ],
             [
+                InlineKeyboardButton("🚫 Borrar por OP", callback_data="dash_admin_del_op_prompt"),
                 InlineKeyboardButton(f"🕹️ Estado: {status_emoji}", callback_data="dash_admin_toggle_status")
             ],
             [
@@ -673,7 +744,8 @@ async def _delete_last_record(query, user_id):
     if user_id in pagos and pagos[user_id]:
         eliminado = pagos[user_id].pop()
         save_pagos(pagos)
-        await query.answer(f"✅ Registro de S/ {eliminado.get('monto')} eliminado.", show_alert=True)
+        log_deletion(user_id, eliminado, user_id)
+        await query.answer(f"✅ Registro de S/ {eliminado.get('monto')} eliminado y auditado.", show_alert=True)
     else:
         await query.answer("❌ No hay nada que eliminar.", show_alert=True)
     await dashboard_command(query, None)
@@ -742,10 +814,21 @@ async def _show_admin_global(query):
         f"📝 *Registros Totales:* {total_registros}\n"
         "━━━━━━━━━━━━━━━━━━━━━━\n"
         f"💰 *RECAUDACIÓN TOTAL:* S/ `{total_general:,.2f}`\n\n"
-        "💡 _Este reporte es privado y visible solo para el dueño del bot\\._"
     )
     
-    keyboard = [[InlineKeyboardButton("🔙 Volver al Admin", callback_data="dash_admin_menu")]]
+    # Auditoría de eliminación
+    logs_count = 0
+    if ELIMINADOS_FILE.exists():
+        try: logs_count = len(json.loads(ELIMINADOS_FILE.read_text(encoding="utf-8")))
+        except: pass
+    
+    txt += f"🗑️ *Registros Eliminados (Auditados):* {logs_count}\n"
+    txt += "💡 _Este reporte es privado y visible solo para el dueño del bot\\._"
+    
+    keyboard = [
+        [InlineKeyboardButton("📜 Ver Log de Eliminados", callback_data="dash_admin_show_logs")],
+        [InlineKeyboardButton("🔙 Volver al Admin", callback_data="dash_admin_menu")]
+    ]
     await query.edit_message_text(txt, parse_mode=ParseMode.MARKDOWN_V2, reply_markup=InlineKeyboardMarkup(keyboard))
 
 
@@ -804,6 +887,9 @@ async def commands_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             InlineKeyboardButton("🛒 Dashboard", callback_data="dash_menu"),
         ]
     ]
+    
+    if ADMIN_USER_ID and user_id == str(ADMIN_USER_ID):
+        keyboard.append([InlineKeyboardButton("👑 Panel Administrativo", callback_data="dash_admin_menu")])
     txt = (
         "🎮 *CENTRO DE COMANDOS INTERACTIVO*\n"
         "━━━━━━━━━━━━━━━━━━━━━━\n"
@@ -1004,6 +1090,34 @@ async def buscar_admin_command(update: Update, context: ContextTypes.DEFAULT_TYP
     if not is_private: context.job_queue.run_once(_delete_message_job, 30, chat_id=chat_id, data=msg.message_id)
 
 
+async def borrar_op_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Permite al admin borrar un registro por N° de operación (Global)"""
+    user_id = str(update.effective_user.id)
+    if not ADMIN_USER_ID or user_id != str(ADMIN_USER_ID): return
+    
+    if not context.args:
+        await update.message.reply_text("💡 Uso: `/borrar_op NUMERO_OPERACION`")
+        return
+        
+    op_to_del = context.args[0].strip().lower()
+    pagos = load_pagos()
+    found = False
+    
+    for u_id, records in pagos.items():
+        for i, r in enumerate(records):
+            if str(r.get("numero_operacion", "")).lower() == op_to_del:
+                eliminado = records.pop(i)
+                log_deletion(u_id, eliminado, user_id)
+                save_pagos(pagos)
+                found = True
+                await update.message.reply_text(f"✅ Registro '{op_to_del}' borrado exitosamente del usuario {u_id}.")
+                break
+        if found: break
+        
+    if not found:
+        await update.message.reply_text(f"❌ No encontré ningún pago con N° Operación: {op_to_del}")
+
+
 async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Panel Exclusivo de Administrador"""
     user_id = str(update.effective_user.id)
@@ -1027,6 +1141,7 @@ async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             InlineKeyboardButton("👑 Búsqueda Global", callback_data="dash_admin_search_info")
         ],
         [
+            InlineKeyboardButton("🚫 Borrar por OP", callback_data="dash_admin_del_op_prompt"),
             InlineKeyboardButton(f"🕹️ Estado: {status_emoji}", callback_data="dash_admin_toggle_status")
         ],
         [
@@ -1048,6 +1163,11 @@ async def reply_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     if "BÚSQUEDA GLOBAL" in prompt:
         context.args = message.text.split()
         await buscar_admin_command(update, context)
+        try: await message.reply_to_message.delete()
+        except: pass
+    elif "BORRADO MAESTRO" in prompt:
+        context.args = message.text.split()
+        await borrar_op_command(update, context)
         try: await message.reply_to_message.delete()
         except: pass
     elif "BUSCADOR DE RECIBOS" in prompt:
@@ -1074,6 +1194,7 @@ def main() -> None:
     app.add_handler(CommandHandler("consultar", consultar_command))
     app.add_handler(CommandHandler("recibo", recibo_command))
     app.add_handler(CommandHandler("buscar_admin", buscar_admin_command))
+    app.add_handler(CommandHandler("borrar_op", borrar_op_command))
     app.add_handler(CommandHandler("admin", admin_command))
     
     # Handler unificado para botones interactivos
@@ -1089,4 +1210,22 @@ def main() -> None:
     app.run_polling()
 
 if __name__ == "__main__":
-    main()
+    import asyncio
+    import sys
+    
+    # Fix definitivo para Python 3.12/3.14+ en Windows
+    if sys.platform == 'win32':
+        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+    
+    # Creamos y establecemos el loop manualmente antes de llamar a main()
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    
+    try:
+        main()
+    except (KeyboardInterrupt, SystemExit):
+        logger.info("Bot detenido.")
+    except Exception:
+        logger.exception("Error crítico:")
+    finally:
+        loop.close()

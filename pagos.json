@@ -29,6 +29,22 @@
       "image_hash": "13084a4b700be2ee816b881ebf25d6039a6fe645d8aa6effe285945a8e2c8bc4",
       "file_id": "AgACAgEAAxkBAANaaeJMxmLejiYr1eDtvAq7vcH3k48AAiUMaxuidRBHE-jwxpb_10IBAAMCAAN5AAM7BA",
       "_username": "S/N"
+    },
+    {
+      "emisor": "Yape",
+      "pagador": "Julio Armando Marcelo Olaya",
+      "monto": 54.0,
+      "moneda": "Soles",
+      "pais": "Peru",
+      "numero_operacion": "02429551",
+      "fecha": "2026-04-17",
+      "hora": "10:44:00",
+      "destino": "Dale",
+      "categoria": null,
+      "referencia": null,
+      "image_hash": "45b418da3a3d75cd776aba03faf53c565c1fb07a0b2403e5149b3f4a04dcd527",
+      "file_id": "AgACAgEAAxkBAANkaeJVZ4M0q5HOdtHmSD6YFZYW8OQAAicMaxuidRBHiClSgkHMGIcBAAMCAAN5AAM7BA",
+      "_username": "S/N"
     }
   ],
   "8480057157": [
