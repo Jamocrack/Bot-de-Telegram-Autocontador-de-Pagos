@@ -10,7 +10,9 @@ El sistema funciona de forma **100% local, privada y sin necesidad de servidores
 - **🌍 IA Internacional:** Reconoce pagos de cualquier país y entidad (PayPal, Binance, Lemon, Bancos locales).
 - **💱 Soporte Multi-moneda:** Detecta Soles, Dólares, Euros y USDT, con conversión automática a Soles en tiempo real.
 - **🛡️ Seguridad por "Lista Blanca":** Tú decides en qué grupos puede trabajar el bot, protegiendo tu uso de la IA.
-- **👑 Resumen General de Admin:** El dueño del bot tiene un botón especial para ver las estadísticas globales de todos los usuarios.
+- **🕵️ Privacidad y Modo Sigiloso:** En grupos, el bot autodesintegra la foto de tu pago de inmediato para que nadie más la vea, y sus respuestas tienen un temporizador de autodestrucción.
+- **☁️ Almacenamiento Cero:** No satura tu disco duro. Guarda los recibos en la nube de Telegram y te permite recuperarlos mediante un comando especial.
+- **👑 Resumen y Búsqueda Global (Modo Admin):** El dueño cuenta con reportes generales y una potente búsqueda en la base de datos de todos los usuarios para rastrear exactamente quién, cómo y a dónde se movió el dinero.
 - **🧹 Sistema de Chat Limpio:** Borra automáticamente mensajes de error o estados temporales para mantener tus grupos impecables.
 - **📊 Gestión Total:** Buscador integrado, reportes por categoría y exportación a CSV compatible con Excel.
 
@@ -77,12 +79,19 @@ El bot solo responderá en los chats que pongas aquí.
 
 ---
 
-## 🛠️ Comandos Dinámicos
+## 🛠️ Comandos Dinámicos y Opciones
 
 - `/commands`: Abre el **Centro de Comandos Interactivo** con botones.
-- `/dashboard`: Panel de control para ver estadísticas, exportar datos o borrar registros.
+- `/admin`: Panel de Control Exclusivo para el Dueño (Activar/Desactivar sistema, ver Status global y herramientas).
+- `/dashboard`: Panel de control para ver estadísticas, exportar datos o visualizar recibos a través de las interacciones nativas `ForceReply`.
 - `/buscar [texto]`: Encuentra transacciones específicas por nombre o monto.
 - `/consultar [persona/categoría]`: Reportes inteligentes y sumatorias instantáneas.
+- `/recibo [op]`: Devuelve al momento la foto original alojada en la nube si tienes el número de la operación (OP).
+- `/buscar_admin [texto]`: (Privilegiado) Búsqueda cruzada y definitiva, con lectura inteligente de usuarios (`@usuario`).
+
+💡 **Mejoras Inteligentes Incluidas:** 
+1. **Notas al instante:** Si adjuntas un texto/pie de foto (_caption_) al momento de mandar tu captura de pago en Telegram, el bot fusionará tu mensaje con el análisis y lo guardará como nota o referencia.
+2. **Sistema Anti-fallos (SYS-IDs):** En caso la foto esté en mal estado y la Inteligencia Artificial sea incapaz de hallar el N° de Operación de la transferencia, el bot generará un código propio infalible (`SYS-XXXX`) garantizando que jamás se quede un papel fuera del sistema.
 
 ---
 

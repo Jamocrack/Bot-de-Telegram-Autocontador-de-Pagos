@@ -13,6 +13,22 @@
       "categoria": "Deposito",
       "referencia": null,
       "image_hash": "544e936fdf125b950c7f539a76419ecf64885e4b7d96ba8e0656c47fb65ddfc7"
+    },
+    {
+      "emisor": "Yape",
+      "pagador": "Gloria Tum",
+      "monto": 8.0,
+      "moneda": "Soles",
+      "pais": "Peru",
+      "numero_operacion": "07226896",
+      "fecha": "2026-04-16",
+      "hora": "09:01:00",
+      "destino": "Yape",
+      "categoria": null,
+      "referencia": null,
+      "image_hash": "13084a4b700be2ee816b881ebf25d6039a6fe645d8aa6effe285945a8e2c8bc4",
+      "file_id": "AgACAgEAAxkBAANaaeJMxmLejiYr1eDtvAq7vcH3k48AAiUMaxuidRBHE-jwxpb_10IBAAMCAAN5AAM7BA",
+      "_username": "S/N"
     }
   ],
   "8480057157": [
