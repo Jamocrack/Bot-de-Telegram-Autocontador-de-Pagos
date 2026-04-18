@@ -58,19 +58,28 @@ TEMP_DIR.mkdir(exist_ok=True)
 PAGOS_FILE = Path("pagos.json")
 SETTINGS_FILE = Path("settings.json")
 ELIMINADOS_FILE = Path("eliminados.json")
+PENDIENTES_FILE = Path("pendientes.json")
 
 # ---------------------------------------------------------------------------
 # Helpers JSON y Procesamiento
 # ---------------------------------------------------------------------------
 
 def load_settings() -> dict:
-    if not SETTINGS_FILE.exists(): return {"is_active": True}
-    try: return json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
-    except: return {"is_active": True}
+    if not SETTINGS_FILE.exists():
+        return {"is_active": True}
+    try:
+        return json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
+    except Exception as e:
+        logger.warning("Error leyendo settings, usando defaults: %s", e)
+        return {"is_active": True}
 
 def save_settings(data: dict) -> None:
-    try: SETTINGS_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-    except: pass
+    try:
+        tmp = SETTINGS_FILE.with_suffix(".tmp")
+        tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        os.replace(tmp, SETTINGS_FILE)
+    except Exception as e:
+        logger.error("Error guardando settings: %s", e)
 
 def is_bot_active(user_id: str) -> bool:
     if ADMIN_USER_ID and str(user_id) == str(ADMIN_USER_ID):
@@ -78,14 +87,29 @@ def is_bot_active(user_id: str) -> bool:
     return load_settings().get("is_active", True)
 
 async def manage_disabled_warning(chat_id: str, context: ContextTypes.DEFAULT_TYPE):
-    """Maneja el mensaje de advertencia 'bot desactivado' borrando el anterior y mandándolo al último."""
+    """Maneja el mensaje de advertencia 'bot desactivado' con contador de cola."""
     prev_msg_id = context.bot_data.get(f"disabled_msg_{chat_id}")
     if prev_msg_id:
         try: await context.bot.delete_message(chat_id=chat_id, message_id=prev_msg_id)
         except: pass
+    
+    count = 0
+    if PENDIENTES_FILE.exists():
+        try: count = len(json.loads(PENDIENTES_FILE.read_text(encoding="utf-8")))
+        except: pass
+    
+    txt = "⛔ *SISTEMA EN PAUSA (MODO SIGILO)*\n━━━━━━━━━━━━━━━━━━━━━━\n"
+    if count > 0:
+        txt += f"📥 Hay *{count}* recibos capturados en cola\\.\n"
+        txt += "💡 _El Administrador los procesará al activar el bot\\._\n"
+    else:
+        txt += "💡 _Ningún dato será procesado públicamente hasta que el administrador lo active\\._\n"
+    
+    txt += "━━━━━━━━━━━━━━━━━━━━━━\n🛡️ _Tu privacidad está protegida: las fotos se eliminan al instante del chat\\._"
+    
     msg = await context.bot.send_message(
         chat_id=chat_id, 
-        text="⛔ *El Bot se encuentra DESACTIVADO por el administrador\\.*\n_Ningún comprobante, mensaje o comando será procesado hasta nuevo aviso\\._", 
+        text=txt, 
         parse_mode=ParseMode.MARKDOWN_V2
     )
     context.bot_data[f"disabled_msg_{chat_id}"] = msg.message_id
@@ -103,8 +127,11 @@ def load_pagos() -> dict:
 
 
 def save_pagos(data: dict) -> None:
+    """Guarda el JSON de pagos de forma atómica (evita corrupción por corte de energía)."""
     try:
-        PAGOS_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        tmp = PAGOS_FILE.with_suffix(".tmp")
+        tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        os.replace(tmp, PAGOS_FILE)
     except Exception as e:
         logger.error("Error guardando datos: %s", e)
 
@@ -142,8 +169,10 @@ def log_deletion(original_user_id: str, record: dict, deleted_by_id: str):
     """Guarda rastro de qué se borró, quién lo hizo y los datos originales."""
     logs = []
     if ELIMINADOS_FILE.exists():
-        try: logs = json.loads(ELIMINADOS_FILE.read_text(encoding="utf-8"))
-        except: pass
+        try:
+            logs = json.loads(ELIMINADOS_FILE.read_text(encoding="utf-8"))
+        except Exception as e:
+            logger.warning("Error leyendo log de eliminados: %s", e)
     
     entry = {
         "fecha_borrado": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -158,7 +187,12 @@ def log_deletion(original_user_id: str, record: dict, deleted_by_id: str):
         }
     }
     logs.append(entry)
-    ELIMINADOS_FILE.write_text(json.dumps(logs, ensure_ascii=False, indent=2), encoding="utf-8")
+    try:
+        tmp = ELIMINADOS_FILE.with_suffix(".tmp")
+        tmp.write_text(json.dumps(logs, ensure_ascii=False, indent=2), encoding="utf-8")
+        os.replace(tmp, ELIMINADOS_FILE)
+    except Exception as e:
+        logger.error("Error guardando log de eliminados: %s", e)
 
 
 # ---------------------------------------------------------------------------
@@ -256,103 +290,108 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     else:
         return
         
-    if not is_bot_active(user_id):
-        if not is_private:
-            try: await message.delete()
-            except Exception: pass
-            await manage_disabled_warning(chat_id, context)
-        else:
-            msg = await context.bot.send_message(chat_id=chat_id, text="⚠️ El Bot se encuentra temporalmente *DESACTIVADO*\\.", parse_mode=ParseMode.MARKDOWN_V2)
-            context.job_queue.run_once(_delete_message_job, 15, chat_id=chat_id, data=msg.message_id)
-        return
-        
-    if is_private:
-        status_msg = await message.reply_text(f"`{format_progress_bar(10, 100)}` 📥 Descargando...")
-    else:
-        status_msg = await context.bot.send_message(chat_id=chat_id, text=f"`{format_progress_bar(10, 100)}` 📥 Descargando...", parse_mode=ParseMode.MARKDOWN_V2)
-        try:
-            await message.delete()
-        except Exception:
-            logger.warning(f"No se pudo borrar el mensaje original en {chat_id}.")
-
+    # 2. Descargar, hashear y verificar duplicados
     dest_path = TEMP_DIR / f"{file_id}{ext}"
     try:
         tg_file = await context.bot.get_file(file_id)
         await tg_file.download_to_drive(dest_path)
-        
-        await status_msg.edit_text(f"`{format_progress_bar(40, 100)}` 🔍 Analizando huella...")
         img_hash = _calculate_hash(dest_path)
+        
         if is_duplicate(user_id, img_hash, ""):
-            await status_msg.edit_text("⚠️ Este comprobante ya existe en tu historial.")
-            if not is_private:
-                context.job_queue.run_once(_delete_message_job, 10, chat_id=chat_id, data=status_msg.message_id)
+            if is_private:
+                await message.reply_text("⚠️ Este comprobante ya existe en tu historial.")
+            else:
+                # Borrar silenciosamente si es duplicado en grupo (activo o inactivo)
+                try: await message.delete()
+                except: pass
             return
+
+        # 3. SI ESTÁ INACTIVO → Guardar en cola (imagen QUEDA en el grupo visible)
+        if not is_bot_active(user_id):
+            pendientes = []
+            if PENDIENTES_FILE.exists():
+                try:
+                    pendientes = json.loads(PENDIENTES_FILE.read_text(encoding="utf-8"))
+                except Exception as e:
+                    logger.warning("Error leyendo cola de pendientes: %s", e)
             
-        await status_msg.edit_text(f"`{format_progress_bar(70, 100)}` 🧠 Consultando IA...")
+            pendientes.append({
+                "file_id": file_id,
+                "message_id": message.message_id,  # Guardar para borrar del grupo al procesar
+                "user_id": user_id,
+                "chat_id": chat_id,
+                "is_private": is_private,
+                "caption": user_caption,
+                "hash": img_hash,
+                "ext": ext,
+                "username": update.effective_user.username or "S/N"
+            })
+            try:
+                tmp = PENDIENTES_FILE.with_suffix(".tmp")
+                tmp.write_text(json.dumps(pendientes, ensure_ascii=False, indent=2), encoding="utf-8")
+                os.replace(tmp, PENDIENTES_FILE)
+                logger.info("Recibo encolado (bot inactivo): user=%s file=%s", user_id, file_id)
+            except Exception as e:
+                logger.error("Error guardando en cola de pendientes: %s", e)
+            
+            if is_private:
+                await message.reply_text("⏳ El bot está en pausa\\. He capturado tu recibo sigilosamente y se procesará automáticamente cuando el ADMIN active el bot\\.", parse_mode=ParseMode.MARKDOWN_V2)
+            else:
+                await manage_disabled_warning(chat_id, context)
+            return
+
+        # 4. SI ESTÁ ACTIVO → Borrar del grupo inmediatamente por privacidad, luego procesar
+        if not is_private:
+            try: await message.delete()
+            except: pass
+
+        # 4. SI ESTÁ ACTIVO -> Procesar con IA normalmente
+        status_text = f"`{format_progress_bar(10, 100)}` 📥 Descargando..."
+        if is_private: status_msg = await message.reply_text(status_text, parse_mode=ParseMode.MARKDOWN_V2)
+        else: status_msg = await context.bot.send_message(chat_id=chat_id, text=status_text, parse_mode=ParseMode.MARKDOWN_V2)
+
+        await status_msg.edit_text(f"`{format_progress_bar(70, 100)}` 🧠 Consultando IA...", parse_mode=ParseMode.MARKDOWN_V2)
         data = await asyncio.to_thread(process_receipt_with_ai, dest_path)
         
+        # Fusionar caption
         if user_caption:
-            current_ref = str(data.get("referencia", "")).strip()
-            if current_ref and current_ref.lower() != "null":
-                data["referencia"] = f"{user_caption} (Nota IA: {current_ref})"
-            else:
-                data["referencia"] = user_caption
+            ref = str(data.get("referencia", "")).strip()
+            data["referencia"] = f"{user_caption} (Nota IA: {ref})" if ref.lower() != "null" else user_caption
         
-        await status_msg.edit_text(f"`{format_progress_bar(90, 100)}` 💾 Guardando datos...")
+        await status_msg.edit_text(f"`{format_progress_bar(90, 100)}` 💾 Guardando datos...", parse_mode=ParseMode.MARKDOWN_V2)
         
-        op_original = str(data.get("numero_operacion", "")).strip()
-        if not op_original or op_original.lower() in ["null", "s/n", "none", ""]:
-            op = "SYS-" + str(uuid.uuid4()).upper()[:6]
-            data["numero_operacion"] = op
-        else:
-            op = op_original
-            
-        if op_original and is_duplicate(user_id, "", op_original):
-            await status_msg.edit_text(f"⚠️ El N° Operación: {op_original} ya fue registrado antes.")
-            if not is_private:
-                context.job_queue.run_once(_delete_message_job, 10, chat_id=chat_id, data=status_msg.message_id)
+        if not data.get("numero_operacion"):
+            data["numero_operacion"] = "SYS-" + str(uuid.uuid4()).upper()[:6]
+        
+        op = data["numero_operacion"]
+        if is_duplicate(user_id, "", op):
+            await status_msg.edit_text(f"⚠️ El N° Operación: {op} ya existe.")
             return
-            
+
+        # Conversión moneda
         monto = float(data.get("monto", 0) or 0)
-        moneda = data.get("moneda", "Soles")
-        if moneda == "Dólares":
+        if data.get("moneda") == "Dólares":
             rate = await asyncio.to_thread(get_exchange_rate)
             data["monto_original"] = f"{monto} USD"
             data["monto"] = round(monto * rate, 2)
-            data["tipo_cambio"] = rate
-            
-        data["image_hash"] = img_hash
-        data["file_id"] = file_id
-        data["_username"] = update.effective_user.username or "S/N"
+
+        data.update({"image_hash": img_hash, "file_id": file_id, "_username": update.effective_user.username or "S/N"})
         
         pagos = load_pagos()
-        if user_id not in pagos:
-            pagos[user_id] = []
+        if user_id not in pagos: pagos[user_id] = []
         pagos[user_id].append(data)
         save_pagos(pagos)
         
         ticket = _generate_ticket(data)
-        
-        keyboard = [
-            [
-                InlineKeyboardButton("📊 Dashboard", callback_data="dash_menu"),
-                InlineKeyboardButton("🗑️ Borrar Este", callback_data="dash_delete_conf")
-            ]
-        ]
+        kbd = InlineKeyboardMarkup([[InlineKeyboardButton("📊 Dashboard", callback_data="dash_menu"), InlineKeyboardButton("🗑️ Borrar", callback_data="dash_delete_conf")]])
         
         await status_msg.delete()
-        if is_private:
-            reply_msg = await context.bot.send_message(chat_id=chat_id, text=ticket, parse_mode=ParseMode.MARKDOWN_V2, reply_markup=InlineKeyboardMarkup(keyboard))
-        else:
-            ticket += "\n\n⏳ _Este mensaje se auto\\-destruirá en 10 segundos por privacidad\\._"
-            reply_msg = await context.bot.send_message(chat_id=chat_id, text=ticket, parse_mode=ParseMode.MARKDOWN_V2, reply_markup=InlineKeyboardMarkup(keyboard))
-            context.job_queue.run_once(_delete_message_job, 10, chat_id=chat_id, data=reply_msg.message_id)
-            
-    except Exception:
-        logger.exception("Error al procesar.")
-        err_msg = await status_msg.edit_text("❌ Error al procesar. Verifica que la imagen sea legible.")
+        rep = await context.bot.send_message(chat_id=chat_id, text=ticket, parse_mode=ParseMode.MARKDOWN_V2, reply_markup=kbd)
         if not is_private:
-            context.job_queue.run_once(_delete_message_job, 15, chat_id=chat_id, data=err_msg.message_id)
+            context.job_queue.run_once(_delete_message_job, 30, chat_id=chat_id, data=rep.message_id)
+
+    except Exception:
+        logger.exception("Error en media")
     finally:
         dest_path.unlink(missing_ok=True)
 
@@ -489,7 +528,8 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 save_pagos(pagos)
                 log_deletion(user_id, eliminado, user_id)
                 await query.answer(f"✅ Borrado: S/ {eliminado.get('monto')}", show_alert=True)
-        except: pass
+        except Exception as e:
+            logger.warning("Error en borrado selectivo: %s", e)
         await dashboard_command(update, context)
     elif data == "dash_admin_search_info":
         if not ADMIN_USER_ID or user_id != str(ADMIN_USER_ID): return
@@ -514,18 +554,33 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     elif data == "dash_admin_show_logs":
         if not ADMIN_USER_ID or user_id != str(ADMIN_USER_ID): return
         if not ELIMINADOS_FILE.exists():
-            await query.answer("No hay logs aún.", show_alert=True)
+            await query.answer("No hay logs aún\\.", show_alert=True)
             return
-        logs = json.loads(ELIMINADOS_FILE.read_text(encoding="utf-8"))[-10:][::-1]
+        try:
+            logs = json.loads(ELIMINADOS_FILE.read_text(encoding="utf-8"))[-10:][::-1]
+        except Exception as e:
+            logger.error("Error leyendo log de eliminados: %s", e)
+            await query.answer("Error leyendo el log\\.", show_alert=True)
+            return
+        
+        if not logs:
+            await query.answer("No hay registros de eliminación aún\\.", show_alert=True)
+            return
+        
         txt = "🗑️ *HISTORIAL DE ELIMINACIONES*\n━━━━━━━━━━━━━━━━━━━━━━\n"
-        for l in logs:
-            fecha = escape_markdown(l.get("fecha_borrado", ""))
-            u = escape_markdown(l.get("username_original", "S/N"))
-            m = l.get("datos_pago", {}).get("monto", 0)
-            txt += f"• `{fecha}` | @{u}\n  └ S/ `{m}` borrado por {l.get('borrado_por')[:6]}...\n"
+        for log_entry in logs:
+            fecha = escape_markdown(str(log_entry.get("fecha_borrado", "S/F")))
+            u = escape_markdown(str(log_entry.get("username_original", "S/N")))
+            m = log_entry.get("datos_pago", {}).get("monto", 0)
+            by_id = str(log_entry.get("borrado_por") or "?")[:8]
+            txt += f"• `{fecha}`\n  └ @{u} \\| S/ `{m}` \\| por `{escape_markdown(by_id)}`\n"
         
         keyboard = [[InlineKeyboardButton("🔙 Volver", callback_data="dash_admin_global")]]
-        await query.edit_message_text(txt, parse_mode=ParseMode.MARKDOWN_V2, reply_markup=InlineKeyboardMarkup(keyboard))
+        try:
+            await query.edit_message_text(txt, parse_mode=ParseMode.MARKDOWN_V2, reply_markup=InlineKeyboardMarkup(keyboard))
+        except Exception as e:
+            logger.error("Error mostrando logs de eliminación: %s", e)
+            await query.answer("Error al mostrar logs\\.", show_alert=True)
     elif data == "dash_admin_toggle_status":
         if not ADMIN_USER_ID or user_id != str(ADMIN_USER_ID): return
         settings = load_settings()
@@ -536,51 +591,43 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         status_txt = "🟢 ACTIVADO" if new_status else "🔴 DESACTIVADO"
         bot_msg = "ACTIVADO" if new_status else "DESACTIVADO"
         
+        count = 0
+        if PENDIENTES_FILE.exists():
+            try:
+                count = len(json.loads(PENDIENTES_FILE.read_text(encoding="utf-8")))
+            except Exception as e:
+                logger.warning("Error contando pendientes: %s", e)
+
         for c_id in AUTHORIZED_CHATS:
+            # Limpiar warnings anteriores
             last_msg_id = context.bot_data.get(f"disabled_msg_{c_id}")
             if last_msg_id:
                 try: await context.bot.delete_message(chat_id=c_id, message_id=last_msg_id)
                 except: pass
                 context.bot_data.pop(f"disabled_msg_{c_id}", None)
-                
-            try:
-                ann = await context.bot.send_message(chat_id=c_id, text=f"📢 *AVISO DEL ADMINISTRADOR*\n━━━━━━━━━━━━━━━━━━━━━━\nEl bot se encuentra *{bot_msg}*\\.", parse_mode=ParseMode.MARKDOWN_V2)
-                context.job_queue.run_once(_delete_message_job, 30, chat_id=c_id, data=ann.message_id)
-            except Exception: pass
             
-        keyboard = [
-            [
-                InlineKeyboardButton("🌍 REPORTE GLOBAL", callback_data="dash_admin_global"),
-                InlineKeyboardButton("👑 Búsqueda Global", callback_data="dash_admin_search_info")
-            ],
-            [
-                InlineKeyboardButton(f"🕹️ Estado: {status_txt}", callback_data="dash_admin_toggle_status")
-            ],
-            [
-                InlineKeyboardButton("❌ Cerrar", callback_data="dash_close")
-            ]
-        ]
-        await query.edit_message_reply_markup(reply_markup=InlineKeyboardMarkup(keyboard))
+            # Anuncio de activación/desactivación
+            txt = "🟢 *BOT ACTIVADO*" if new_status else "🔴 *BOT DESACTIVADO*"
+            if new_status and count > 0:
+                txt += f"\n📥 *{count}* recibos aceptados para análisis\\."
+            elif new_status:
+                txt += "\n_Listo para recibir nuevos comprobantes\\._"
+            else:
+                txt += "\n_Modo sigilo activado: procesando solo en cola\\._"
+            
+            try:
+                ann = await context.bot.send_message(chat_id=c_id, text=txt, parse_mode=ParseMode.MARKDOWN_V2)
+                context.job_queue.run_once(_delete_message_job, 15, chat_id=c_id, data=ann.message_id)
+            except Exception: pass
+        
+        if new_status:
+            context.job_queue.run_once(process_pending_queue, 1)
+            
+        await admin_command(update, context)
+
     elif data == "dash_admin_menu":
-        if not ADMIN_USER_ID or user_id != str(ADMIN_USER_ID): return
-        settings = load_settings()
-        is_active = settings.get("is_active", True)
-        status_emoji = "🟢 ACTIVADO" if is_active else "🔴 DESACTIVADO"
-        keyboard = [
-            [
-                InlineKeyboardButton("🌍 REPORTE GLOBAL", callback_data="dash_admin_global"),
-                InlineKeyboardButton("👑 Búsqueda Global", callback_data="dash_admin_search_info")
-            ],
-            [
-                InlineKeyboardButton("🚫 Borrar por OP", callback_data="dash_admin_del_op_prompt"),
-                InlineKeyboardButton(f"🕹️ Estado: {status_emoji}", callback_data="dash_admin_toggle_status")
-            ],
-            [
-                InlineKeyboardButton("❌ Cerrar", callback_data="dash_close")
-            ]
-        ]
-        txt = "👑 *PANEL EXCLUSIVO DE ADMINISTRADOR*\n━━━━━━━━━━━━━━━━━━━━━━\nConfigura el bot y revisa todo:"
-        await query.edit_message_text(txt, parse_mode=ParseMode.MARKDOWN_V2, reply_markup=InlineKeyboardMarkup(keyboard))
+        await admin_command(update, context)
+
     elif data == "dash_close":
         try: await query.message.delete()
         except: pass
@@ -682,7 +729,7 @@ async def buscar_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         if not is_private:
             try: await update.message.delete()
             except: pass
-        msg = await context.bot.send_message(chat_id=chat_id, text="⚠️ El Bot se encuentra temporalmente *DESACTIVADO*.", parse_mode=ParseMode.MARKDOWN_V2)
+        msg = await context.bot.send_message(chat_id=chat_id, text="⚠️ El Bot se encuentra temporalmente *DESACTIVADO*\\.", parse_mode=ParseMode.MARKDOWN_V2)
         if not is_private: context.job_queue.run_once(_delete_message_job, 15, chat_id=chat_id, data=msg.message_id)
         return
 
@@ -730,25 +777,7 @@ async def buscar_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     if not is_private: context.job_queue.run_once(_delete_message_job, 20, chat_id=chat_id, data=msg.message_id)
 
 
-async def _show_delete_confirmation(query):
-    keyboard = [
-        [InlineKeyboardButton("✅ SÍ, borrar último", callback_data="dash_delete_now")],
-        [InlineKeyboardButton("❌ NO, cancelar", callback_data="dash_menu")]
-    ]
-    txt = "⚠️ *¿Deseas eliminar el último pago registrado?*\nEsta acción no se puede deshacer\\."
-    await query.edit_message_text(txt, parse_mode=ParseMode.MARKDOWN_V2, reply_markup=InlineKeyboardMarkup(keyboard))
 
-
-async def _delete_last_record(query, user_id):
-    pagos = load_pagos()
-    if user_id in pagos and pagos[user_id]:
-        eliminado = pagos[user_id].pop()
-        save_pagos(pagos)
-        log_deletion(user_id, eliminado, user_id)
-        await query.answer(f"✅ Registro de S/ {eliminado.get('monto')} eliminado y auditado.", show_alert=True)
-    else:
-        await query.answer("❌ No hay nada que eliminar.", show_alert=True)
-    await dashboard_command(query, None)
 
 
 async def _show_resumen(query, user_records):
@@ -785,15 +814,7 @@ async def _show_recientes(query, user_records):
     await query.edit_message_text(txt, parse_mode=ParseMode.MARKDOWN_V2, reply_markup=InlineKeyboardMarkup(keyboard))
 
 
-async def _export_data(query, context, user_records):
-    # Función obsoleta, reemplazada por _export_to_csv
-    pass
 
-
-async def restart_dashboard(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    query = update.callback_query
-    if query.data == "dash_menu":
-        await dashboard_command(update, context)
 
 
 async def _show_admin_global(query):
@@ -848,16 +869,16 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             context.job_queue.run_once(_delete_message_job, 15, chat_id=chat_id, data=msg.message_id)
         return
 
-    user_name = update.effective_user.first_name
+    user_name = escape_markdown(update.effective_user.first_name)
     help_text = (
-        f"👋 ¡Hola {user_name}! Soy tu asistente de Autocontador\\.\n\n"
+        f"👋 ¡Hola {user_name}\\! Soy tu asistente de Autocontador\\.\n\n"
         "*¿Cómo funciono?*\n"
-        "1\\. Envíame una **foto o captura** de un comprobante de pago \\(Yape, Plin, Transferencia, etc\\.\\)\\.\n"
+        "1\\. Envíame una *foto o captura* de un comprobante \\(Yape, Plin, Transferencia, etc\\.\\)\\.\n"
         "2\\. Analizaré la imagen y guardaré los datos automáticamente\\.\n\n"
         "*Comandos disponibles:*\n"
         "🚀 /start \\- Ver este mensaje de ayuda\\.\n"
-        "📊 /dashboard \\- Ver tu resumen total de pagos acumulados\\.\n\n"
-        "💡 _Tip: Puedes enviarme las fotos en chats privados o en grupos donde esté presente\\._"
+        "📊 /dashboard \\- Ver tu resumen de pagos\\.\n\n"
+        "💡 _Tip: Puedes enviarme fotos en chat privado o en grupos autorizados\\._"
     )
     await update.effective_message.reply_text(help_text, parse_mode=ParseMode.MARKDOWN_V2)
 
@@ -951,7 +972,7 @@ async def consultar_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         if not is_private:
             try: await update.message.delete()
             except: pass
-        msg = await context.bot.send_message(chat_id=chat_id, text="⚠️ El Bot se encuentra temporalmente *DESACTIVADO*.", parse_mode=ParseMode.MARKDOWN_V2)
+        msg = await context.bot.send_message(chat_id=chat_id, text="⚠️ El Bot se encuentra temporalmente *DESACTIVADO*\\.", parse_mode=ParseMode.MARKDOWN_V2)
         if not is_private: context.job_queue.run_once(_delete_message_job, 15, chat_id=chat_id, data=msg.message_id)
         return
 
@@ -960,7 +981,6 @@ async def consultar_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         return
     
     term = " ".join(context.args).lower()
-    user_id = str(update.effective_message.from_user.id)
     pagos = load_pagos()
     user_records = pagos.get(user_id, [])
     
@@ -990,7 +1010,7 @@ async def recibo_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         if not is_private:
             try: await update.message.delete()
             except: pass
-        msg = await context.bot.send_message(chat_id=chat_id, text="⚠️ El Bot se encuentra temporalmente *DESACTIVADO*.", parse_mode=ParseMode.MARKDOWN_V2)
+        msg = await context.bot.send_message(chat_id=chat_id, text="⚠️ El Bot se encuentra temporalmente *DESACTIVADO*\\.", parse_mode=ParseMode.MARKDOWN_V2)
         if not is_private: context.job_queue.run_once(_delete_message_job, 15, chat_id=chat_id, data=msg.message_id)
         return
 
@@ -1137,21 +1157,147 @@ async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     
     keyboard = [
         [
-            InlineKeyboardButton("🌍 REPORTE GLOBAL", callback_data="dash_admin_global"),
-            InlineKeyboardButton("👑 Búsqueda Global", callback_data="dash_admin_search_info")
+            InlineKeyboardButton("📊 Reporte Avanzado", callback_data="dash_admin_global"),
+            InlineKeyboardButton("🎯 Búsqueda Maestro", callback_data="dash_admin_search_info")
         ],
         [
-            InlineKeyboardButton("🚫 Borrar por OP", callback_data="dash_admin_del_op_prompt"),
-            InlineKeyboardButton(f"🕹️ Estado: {status_emoji}", callback_data="dash_admin_toggle_status")
+            InlineKeyboardButton("🗑️ Borrado Global", callback_data="dash_admin_del_op_prompt"),
+            InlineKeyboardButton(f"⚡ {status_emoji}", callback_data="dash_admin_toggle_status")
         ],
         [
-            InlineKeyboardButton("❌ Cerrar", callback_data="dash_close")
+            InlineKeyboardButton("📜 Historial de Auditoría", callback_data="dash_admin_show_logs")
+        ],
+        [
+            InlineKeyboardButton("💎 Command Center", callback_data="dash_commands"),
+            InlineKeyboardButton("🚪 Salir", callback_data="dash_close")
         ]
     ]
-    txt = "👑 *PANEL EXCLUSIVO DE ADMINISTRADOR*\n━━━━━━━━━━━━━━━━━━━━━━\nConfigura el bot y revisa todo:"
-    msg = await update.effective_message.reply_text(txt, parse_mode=ParseMode.MARKDOWN_V2, reply_markup=InlineKeyboardMarkup(keyboard))
-    if not is_private:
-        context.job_queue.run_once(_delete_message_job, 60, chat_id=chat_id, data=msg.message_id)
+    txt = (
+        "💎 *ELITE FINANCIAL TERMINAL*\n"
+        "━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"👑 *Owner:* {escape_markdown(update.effective_user.first_name)}\n"
+        f"📡 *Estado Sistema:* {status_emoji}\n"
+        "━━━━━━━━━━━━━━━━━━━━━━\n"
+        "Acceso maestro concedido\\. Selecciona un módulo:"
+    )
+    
+    if update.callback_query:
+        await update.callback_query.edit_message_text(txt, parse_mode=ParseMode.MARKDOWN_V2, reply_markup=InlineKeyboardMarkup(keyboard))
+    else:
+        msg = await update.effective_message.reply_text(txt, parse_mode=ParseMode.MARKDOWN_V2, reply_markup=InlineKeyboardMarkup(keyboard))
+        if not is_private:
+            context.job_queue.run_once(_delete_message_job, 45, chat_id=chat_id, data=msg.message_id)
+
+
+async def process_pending_queue(context: ContextTypes.DEFAULT_TYPE):
+    """Procesa recibos acumulados mientras el bot estaba OFF.
+    
+    Estrategia segura: procesa primero, luego elimina solo los exitosos.
+    Si el bot crashea a mitad, los no procesados permanecen en la cola.
+    """
+    if not PENDIENTES_FILE.exists():
+        return
+    try:
+        pendientes = json.loads(PENDIENTES_FILE.read_text(encoding="utf-8"))
+    except Exception as e:
+        logger.error("Error leyendo cola de pendientes: %s", e)
+        return
+    
+    if not pendientes:
+        return
+    
+    logger.info("Procesando %d recibos en cola...", len(pendientes))
+    processed_ids = set()
+    
+    for p in pendientes:
+        d_path = None
+        try:
+            f_id = p["file_id"]
+            u_id, c_id = p["user_id"], p["chat_id"]
+            cap, h, ext = p.get("caption", ""), p["hash"], p.get("ext", ".jpg")
+            d_path = TEMP_DIR / f"q_{f_id}{ext}"
+            
+            tg_f = await context.bot.get_file(f_id)
+            await tg_f.download_to_drive(d_path)
+            data = await asyncio.to_thread(process_receipt_with_ai, d_path)
+            
+            if cap:
+                ref = str(data.get("referencia", "")).strip()
+                data["referencia"] = f"{cap} (IA: {ref})" if ref.lower() != "null" else cap
+            
+            if not data.get("numero_operacion"):
+                data["numero_operacion"] = "SYS-" + str(uuid.uuid4()).upper()[:6]
+            
+            op = data["numero_operacion"]
+            # Verificar duplicado antes de guardar (protege contra re-procesamiento)
+            if is_duplicate(u_id, h, op):
+                logger.warning("Pendiente duplicado ignorado: hash=%s op=%s", h[:8], op)
+                processed_ids.add(f_id)  # Marcar como procesado para que salga de la cola
+                continue
+            
+            # Conversión de moneda (igual que en flujo normal activo)
+            monto = float(data.get("monto", 0) or 0)
+            if data.get("moneda") == "Dólares":
+                rate = await asyncio.to_thread(get_exchange_rate)
+                data["monto_original"] = f"{monto} USD"
+                data["monto"] = round(monto * rate, 2)
+            
+            data.update({"image_hash": h, "file_id": f_id, "_username": p.get("username", "S/N")})
+            
+            pagos = load_pagos()
+            if u_id not in pagos:
+                pagos[u_id] = []
+            pagos[u_id].append(data)
+            save_pagos(pagos)
+            
+            txt = _generate_ticket(data) + "\n\n📥 _Procesado desde la cola sigilosa\\._"
+            await context.bot.send_message(chat_id=c_id, text=txt, parse_mode=ParseMode.MARKDOWN_V2)
+            
+            # Borrar el mensaje original del grupo AHORA que ya fue procesado
+            if not p.get("is_private", True) and p.get("message_id"):
+                try:
+                    await context.bot.delete_message(chat_id=c_id, message_id=p["message_id"])
+                    logger.info("Mensaje original borrado del grupo: chat=%s msg=%s", c_id, p['message_id'])
+                except Exception as del_err:
+                    logger.warning("No se pudo borrar mensaje del grupo (puede ya no existir): %s", del_err)
+            
+            processed_ids.add(f_id)
+            logger.info("Pendiente procesado exitosamente: %s", f_id)
+        except Exception:
+            logger.exception("Error procesando pendiente %s", p.get("file_id", "?"))
+        finally:
+            if d_path:
+                d_path.unlink(missing_ok=True)
+    
+    # Solo eliminar los que se procesaron exitosamente
+    remaining = [p for p in pendientes if p.get("file_id") not in processed_ids]
+    if remaining:
+        logger.warning("%d recibos no pudieron procesarse, se mantienen en cola.", len(remaining))
+        try:
+            tmp = PENDIENTES_FILE.with_suffix(".tmp")
+            tmp.write_text(json.dumps(remaining, ensure_ascii=False, indent=2), encoding="utf-8")
+            os.replace(tmp, PENDIENTES_FILE)
+        except Exception as e:
+            logger.error("Error actualizando cola de pendientes: %s", e)
+    else:
+        PENDIENTES_FILE.unlink(missing_ok=True)
+        logger.info("Cola de pendientes procesada y limpiada.")
+
+
+async def group_cleanup_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Elimina cualquier mensaje no deseado en grupos (texto, stickers, etc) para mantener limpieza total."""
+    if update.effective_chat.type in ["group", "supergroup"]:
+        chat_id = str(update.effective_chat.id)
+        if chat_id in AUTHORIZED_CHATS:
+            user_id = str(update.effective_user.id)
+            # Ignorar si es el admin configurado
+            if ADMIN_USER_ID and user_id == str(ADMIN_USER_ID):
+                return
+            
+            try:
+                await update.effective_message.delete()
+            except:
+                pass
 
 
 async def reply_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1182,6 +1328,21 @@ async def reply_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         except: pass
 
 
+async def global_error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Maneja y filtra errores globales para evitar caídas catastróficas y loops infinitos."""
+    from telegram.error import Conflict
+    if isinstance(context.error, Conflict):
+        logger.critical("==================================================================")
+        logger.critical(" ❌ ERROR CRÍTICO: DETECCIÓN DE INSTANCIAS DUPLICADAS")
+        logger.critical(" Otro proceso ya está usando este bot (quizás otra ventana de consola).")
+        logger.critical(" Telegram no permite dos clones al mismo tiempo. Apagando este clon...")
+        logger.critical("==================================================================")
+        import os
+        os._exit(1)
+    else:
+        logger.error("Excepción no manejada en el ciclo de eventos:", exc_info=context.error)
+
+
 def main() -> None:
     logger.info("🚀 Iniciando Autocontador Local...")
     app = Application.builder().token(TELEGRAM_TOKEN).build()
@@ -1206,21 +1367,36 @@ def main() -> None:
     # Manejador de respuestas de ForceReply
     app.add_handler(MessageHandler(filters.REPLY, reply_handler))
     
+    # Manejador de Limpieza de Grupo (Debe ir después de los comandos específicos)
+    app.add_handler(MessageHandler(filters.ChatType.GROUPS & ~filters.COMMAND & ~filters.PHOTO & ~filters.Document.IMAGE, group_cleanup_handler))
+    
+    # Manejador de Errores Global Inteligente
+    app.add_error_handler(global_error_handler)
+    
+    # Notificación de arranque para el Admin
+    if ADMIN_USER_ID:
+        async def notify_startup(context):
+            try: 
+                await context.bot.send_message(
+                    chat_id=ADMIN_USER_ID, 
+                    text="⚙️ *SISTEMA REINICIADO*\nEl bot se ha encendido correctamente\\. Accede al panel con /admin\\.",
+                    parse_mode=ParseMode.MARKDOWN_V2
+                )
+            except: pass
+        app.job_queue.run_once(notify_startup, 2)
+    
     logger.info("🤖 Bot activo...")
     app.run_polling()
 
 if __name__ == "__main__":
     import asyncio
     import sys
-    
-    # Fix definitivo para Python 3.12/3.14+ en Windows
-    if sys.platform == 'win32':
-        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
-    
-    # Creamos y establecemos el loop manualmente antes de llamar a main()
+
+    # Python 3.14 no crea un event loop por defecto en el thread principal.
+    # python-telegram-bot requiere uno existente al llamar run_polling().
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
-    
+
     try:
         main()
     except (KeyboardInterrupt, SystemExit):

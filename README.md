@@ -98,4 +98,20 @@ El bot solo responderá en los chats que pongas aquí.
 
 ---
 
+## 📋 Changelog
+
+### v2.2 — Optimización de Cola y Auditoría (2026-04-18)
+
+#### 🔵 Flujo de Cola "Acumulación Visual"
+- **Gestión de Grupos**: Ahora, cuando el bot está desactivado, las imágenes **permanecen visibles** en el grupo. Esto permite que los usuarios vean lo que se está acumulando en tiempo real.
+- **Procesamiento y Limpieza**: Al activarse el bot, se descargan y procesan todos los pendientes, se guardan en la base de datos, se envía su ticket de confirmación y **recién en ese momento** se eliminan los mensajes originales del grupo para mantener la limpieza.
+- **Persistencia de Message ID**: La cola ahora rastrea el ID del mensaje original para asegurar que la limpieza posterior sea precisa.
+
+#### 🟣 Historial de Auditoría Maestro
+- **Correcciones de Formato**: Se corrigieron errores de parseo en MarkdownV2 que causaban que el log de eliminaciones fallara al mostrarse.
+- **Evasión de Caracteres Especiales**: Implementación de escapes robustos para puntos, guiones y menciones de usuario.
+- **Manejo de Errores**: Se añadió validación al leer el archivo de eliminados para evitar fallos si el JSON está vacío o corrupto.
+
+---
+
 **Diseñado para ser potente, ligero y 100% privado.**
