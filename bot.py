@@ -157,10 +157,14 @@ def is_duplicate(user_id: str, image_hash: str, numero_operacion: str) -> bool:
     return False
 
 
-def escape_markdown(text: str) -> str:
-    """Escapa caracteres especiales para MarkdownV2"""
-    characters = ['_', '*', '[', ']', '(', ')', '~', '`', '>', '#', '+', '-', '=', '|', '{', '}', '.', '!']
+def escape_markdown(text: str, is_code: bool = False) -> str:
+    """Escapa caracteres especiales para MarkdownV2. 
+    Si is_code=True, solo escapa backticks y backslashes."""
     text = str(text)
+    if is_code:
+        return text.replace("\\", "\\\\").replace("`", "\\`")
+    
+    characters = ['_', '*', '[', ']', '(', ')', '~', '`', '>', '#', '+', '-', '=', '|', '{', '}', '.', '!']
     for char in characters:
         text = text.replace(char, f'\\{char}')
     return text
@@ -204,28 +208,42 @@ Eres un experto en OCR y lectura de comprobantes de pago digitales peruanos (Yap
 Tu tarea es EXTRAER exactamente estos campos en formato JSON:
 
   - emisor: nombre de la App o Banco (Yape, Plin, PayPal, Lemon, Binance, Interbank, etc.).
-  - pagador: nombre completo del emisor.
-  - monto: valor numérico decimal.
-  - moneda: nombre o símbolo de la moneda (Soles, Dólares, Euros, USDT, etc.).
-  - pais: país de origen de la transacción.
-  - numero_operacion: ID único o código de seguimiento.
+  - pagador: nombre completo de quien envía el dinero.
+  - monto: valor numérico decimal puro (ej: 10.50). SIN símbolos de moneda.
+  - moneda: nombre de la moneda (Soles, Dólares, Euros, USDT, etc.).
+  - pais: país de origen.
+  - numero_operacion: ID único de la transacción.
   - fecha: YYYY-MM-DD.
   - hora: HH:MM:SS.
-  - destino: Nombre del receptor o cuenta de destino.
-  - categoria: Tipo de gasto/ingreso (Ventas, Servicios, Remesa, etc.).
-  - referencia: Concepto o nota que acompaña al pago (si existe).
+  - destino: Nombre del receptor.
+  - categoria: Tipo de movimiento (Ventas, Servicios, etc.).
+  - referencia: Notas del pago (si hay).
 
-REGLAS:
-1. Responde ÚNICAMENTE con JSON.
-2. Si un campo no es visible, usa null.
-3. Para PayPal/Binance, extrae el ID de transacción con precisión.
-4. Detecta el PAÍS basándote en el formato del comprobante.
-
-Ejemplo:
-{"emisor": "PayPal", "pagador": "John Doe", "monto": 100.00, "moneda": "Dólares", "pais": "USA", "numero_operacion": "TX99281", "fecha": "2024-04-16", "hora": "15:30:22", "destino": "Vendedor XYZ", "categoria": "Servicios", "referencia": "Pago de Invoice #12"}
+REGLAS CRÍTICAS:
+1. Responde ÚNICAMENTE con el objeto JSON puro.
+2. NUNCA incluyas texto antes o después del JSON.
+3. Si un dato no está, usa null (tipo null, no string "null").
+4. El monto debe ser un NÚMERO, no un string.
 """
 
+def _clean_numeric_value(val) -> float:
+    """Intenta convertir cualquier valor a float, limpiando símbolos de moneda o texto."""
+    if val is None: return 0.0
+    if isinstance(val, (int, float)): return float(val)
+    
+    # Si es string, limpiar caracteres no numéricos excepto punto y coma
+    s = str(val).replace(",", ".").replace("S/", "").replace("$", "").replace(" ", "")
+    # Extraer el primer número decimal que encontremos
+    match = re.search(r"[-+]?\d*\.?\d+", s)
+    if match:
+        try:
+            return float(match.group())
+        except ValueError:
+            pass
+    return 0.0
+
 def process_receipt_with_ai(image_path: Path) -> dict:
+    """Envía la imagen a la IA para extraer datos estructurados."""
     with open(image_path, "rb") as f:
         img_b64 = base64.b64encode(f.read()).decode("utf-8")
     
@@ -248,19 +266,43 @@ def process_receipt_with_ai(image_path: Path) -> dict:
     }
     headers = {
         "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-        "Content-Type": "application/json"
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://github.com/autocontador", # Referer opcional para OpenRouter
     }
 
-    resp = requests.post("https://openrouter.ai/api/v1/chat/completions", json=payload, headers=headers, timeout=60)
-    resp.raise_for_status()
-    result = resp.json()
-    content = result["choices"][0]["message"]["content"].strip()
-    
-    # Extraer el JSON
-    match = re.search(r"\{.*?\}", content, re.DOTALL)
-    if match:
-        return json.loads(match.group(0))
-    return json.loads(content)
+    try:
+        resp = requests.post("https://openrouter.ai/api/v1/chat/completions", json=payload, headers=headers, timeout=60)
+        resp.raise_for_status()
+        result = resp.json()
+        
+        if "choices" not in result or not result["choices"]:
+            logger.error("Respuesta inesperada de OpenRouter: %s", result)
+            raise ValueError("No se obtuvo respuesta de la IA")
+            
+        content = result["choices"][0]["message"]["content"].strip()
+        logger.debug("Raw AI Response: %s", content)
+        
+        # Extraer el JSON del contenido (buscamos el bloque más grande entre llaves)
+        match = re.search(r"\{.*\}", content, re.DOTALL)
+        json_str = match.group(0) if match else content
+        
+        try:
+            return json.loads(json_str)
+        except json.JSONDecodeError as e:
+            logger.error("Error al decodificar JSON de la IA. Contenido original: %s", content)
+            raise e
+            
+    except Exception as e:
+        logger.error("Fallo durante el procesamiento con IA: %s", e)
+        # Fallback seguro para no romper el flujo
+        return {
+            "emisor": "ERROR", 
+            "pagador": "No se pudo extraer", 
+            "monto": 0.0, 
+            "moneda": "Soles", 
+            "numero_operacion": f"ERR-{str(uuid.uuid4())[:6]}",
+            "referencia": "Error en el análisis de la IA"
+        }
 
 
 # ---------------------------------------------------------------------------
@@ -290,34 +332,31 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     else:
         return
         
-    # 2. Descargar, hashear y verificar duplicados
+    # 2. Definir ruta temporal
     dest_path = TEMP_DIR / f"{file_id}{ext}"
-    try:
-        tg_file = await context.bot.get_file(file_id)
-        await tg_file.download_to_drive(dest_path)
-        img_hash = _calculate_hash(dest_path)
-        
-        if is_duplicate(user_id, img_hash, ""):
-            if is_private:
-                await message.reply_text("⚠️ Este comprobante ya existe en tu historial.")
-            else:
-                # Borrar silenciosamente si es duplicado en grupo (activo o inactivo)
-                try: await message.delete()
-                except: pass
-            return
+    
+    # 3. Flujo Diferenciado: Inactivo (Sigilo) vs Activo (Visual)
+    if not is_bot_active(user_id):
+        # ────────── MODO INACTIVO (SIGILO) ──────────
+        try:
+            tg_file = await context.bot.get_file(file_id)
+            await tg_file.download_to_drive(dest_path)
+            img_hash = _calculate_hash(dest_path)
+            
+            if is_duplicate(user_id, img_hash, ""):
+                if not is_private:
+                    try: await message.delete()
+                    except: pass
+                return
 
-        # 3. SI ESTÁ INACTIVO → Guardar en cola (imagen QUEDA en el grupo visible)
-        if not is_bot_active(user_id):
             pendientes = []
             if PENDIENTES_FILE.exists():
-                try:
-                    pendientes = json.loads(PENDIENTES_FILE.read_text(encoding="utf-8"))
-                except Exception as e:
-                    logger.warning("Error leyendo cola de pendientes: %s", e)
+                try: pendientes = json.loads(PENDIENTES_FILE.read_text(encoding="utf-8"))
+                except: pass
             
             pendientes.append({
                 "file_id": file_id,
-                "message_id": message.message_id,  # Guardar para borrar del grupo al procesar
+                "message_id": message.message_id,
                 "user_id": user_id,
                 "chat_id": chat_id,
                 "is_private": is_private,
@@ -326,39 +365,58 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                 "ext": ext,
                 "username": update.effective_user.username or "S/N"
             })
-            try:
-                tmp = PENDIENTES_FILE.with_suffix(".tmp")
-                tmp.write_text(json.dumps(pendientes, ensure_ascii=False, indent=2), encoding="utf-8")
-                os.replace(tmp, PENDIENTES_FILE)
-                logger.info("Recibo encolado (bot inactivo): user=%s file=%s", user_id, file_id)
-            except Exception as e:
-                logger.error("Error guardando en cola de pendientes: %s", e)
+            
+            tmp = PENDIENTES_FILE.with_suffix(".tmp")
+            tmp.write_text(json.dumps(pendientes, ensure_ascii=False, indent=2), encoding="utf-8")
+            os.replace(tmp, PENDIENTES_FILE)
             
             if is_private:
                 await message.reply_text("⏳ El bot está en pausa\\. He capturado tu recibo sigilosamente y se procesará automáticamente cuando el ADMIN active el bot\\.", parse_mode=ParseMode.MARKDOWN_V2)
             else:
                 await manage_disabled_warning(chat_id, context)
             return
+            
+        except Exception as e:
+            logger.error("Error en modo sigilo: %s", e)
+            return
 
-        # 4. SI ESTÁ ACTIVO → Borrar del grupo inmediatamente por privacidad, luego procesar
+    # ────────── MODO ACTIVO (VISUAL) ──────────
+    try:
+        # Borrar del grupo inmediatamente por privacidad
         if not is_private:
             try: await message.delete()
             except: pass
 
-        # 4. SI ESTÁ ACTIVO -> Procesar con IA normalmente
-        status_text = f"`{format_progress_bar(10, 100)}` 📥 Descargando..."
-        if is_private: status_msg = await message.reply_text(status_text, parse_mode=ParseMode.MARKDOWN_V2)
-        else: status_msg = await context.bot.send_message(chat_id=chat_id, text=status_text, parse_mode=ParseMode.MARKDOWN_V2)
+        # Feedback Visual Inicial
+        status_text = f"`{format_progress_bar(10, 100)}` 📥 Descargando\\.\\.\\."
+        if is_private:
+            status_msg = await message.reply_text(status_text, parse_mode=ParseMode.MARKDOWN_V2)
+        else:
+            status_msg = await context.bot.send_message(chat_id=chat_id, text=status_text, parse_mode=ParseMode.MARKDOWN_V2)
 
-        await status_msg.edit_text(f"`{format_progress_bar(70, 100)}` 🧠 Consultando IA...", parse_mode=ParseMode.MARKDOWN_V2)
+        # Descarga Real
+        tg_file = await context.bot.get_file(file_id)
+        await tg_file.download_to_drive(dest_path)
+        img_hash = _calculate_hash(dest_path)
+        
+        # Verificar duplicados por hash
+        if is_duplicate(user_id, img_hash, ""):
+            await status_msg.edit_text("⚠️ Este comprobante ya existe en tu historial.")
+            return
+
+        # Procesar con IA
+        await status_msg.edit_text(f"`{format_progress_bar(50, 100)}` 🧠 Consultando IA\\.\\.\\.", parse_mode=ParseMode.MARKDOWN_V2)
         data = await asyncio.to_thread(process_receipt_with_ai, dest_path)
         
-        # Fusionar caption
+        # Fusionar caption sin etiquetas "Nota IA"
         if user_caption:
             ref = str(data.get("referencia", "")).strip()
-            data["referencia"] = f"{user_caption} (Nota IA: {ref})" if ref.lower() != "null" else user_caption
+            if ref and ref.lower() != "null":
+                data["referencia"] = f"{user_caption} | {ref}"
+            else:
+                data["referencia"] = user_caption
         
-        await status_msg.edit_text(f"`{format_progress_bar(90, 100)}` 💾 Guardando datos...", parse_mode=ParseMode.MARKDOWN_V2)
+        await status_msg.edit_text(f"`{format_progress_bar(90, 100)}` 💾 Guardando datos\\.\\.\\.", parse_mode=ParseMode.MARKDOWN_V2)
         
         if not data.get("numero_operacion"):
             data["numero_operacion"] = "SYS-" + str(uuid.uuid4()).upper()[:6]
@@ -368,8 +426,9 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             await status_msg.edit_text(f"⚠️ El N° Operación: {op} ya existe.")
             return
 
-        # Conversión moneda
-        monto = float(data.get("monto", 0) or 0)
+        # Limpieza y conversión de moneda
+        monto = _clean_numeric_value(data.get("monto"))
+        data["monto"] = monto # Normalizar a número limpio
         if data.get("moneda") == "Dólares":
             rate = await asyncio.to_thread(get_exchange_rate)
             data["monto_original"] = f"{monto} USD"
@@ -519,6 +578,8 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         
         keyboard.append([InlineKeyboardButton("🔙 Volver", callback_data="dash_menu")])
         txt = "🗑️ *ELIMINACIÓN SELECTIVA*\nSelecciona exactamente qué pago deseas borrar:"
+        # Corrección de guiones y paréntesis para MarkdownV2
+        txt = txt.replace("-", "\\-").replace("(", "\\(").replace(")", "\\)").replace(".", "\\.")
         await query.edit_message_text(txt, parse_mode=ParseMode.MARKDOWN_V2, reply_markup=InlineKeyboardMarkup(keyboard))
     elif data.startswith("dash_del_spec_"):
         try:
@@ -568,6 +629,8 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             return
         
         txt = "🗑️ *HISTORIAL DE ELIMINACIONES*\n━━━━━━━━━━━━━━━━━━━━━━\n"
+        # Escapar guiones y otros caracteres reservados
+        txt = txt.replace("-", "\\-").replace("(", "\\(").replace(")", "\\)")
         for log_entry in logs:
             fecha = escape_markdown(str(log_entry.get("fecha_borrado", "S/F")))
             u = escape_markdown(str(log_entry.get("username_original", "S/N")))
@@ -678,8 +741,10 @@ async def _export_to_csv(query, context, user_records, mode):
     writer.writeheader()
     
     for r in filtered:
-        # Limpiar dict para el CSV
+        # Limpiar dict para el CSV y asegurar que el país esté bien redactado (Capitalizado)
         row = {k: r.get(k, "") for k in fields}
+        if row.get("pais"):
+            row["pais"] = str(row["pais"]).strip().title()
         writer.writerow(row)
     
     bio = io.BytesIO(output.getvalue().encode('utf-8-sig')) # utf-8-sig para Excel
@@ -843,8 +908,11 @@ async def _show_admin_global(query):
         try: logs_count = len(json.loads(ELIMINADOS_FILE.read_text(encoding="utf-8")))
         except: pass
     
-    txt += f"🗑️ *Registros Eliminados (Auditados):* {logs_count}\n"
+    txt += f"🗑️ *Registros Eliminados \\(Auditados\\):* {logs_count}\n"
     txt += "💡 _Este reporte es privado y visible solo para el dueño del bot\\._"
+    
+    # Escapar guiones en el separador
+    txt = txt.replace("━━━━", "\\━━━━")
     
     keyboard = [
         [InlineKeyboardButton("📜 Ver Log de Eliminados", callback_data="dash_admin_show_logs")],
@@ -928,14 +996,14 @@ def _generate_ticket(data: dict) -> str:
     e = escape_markdown(data.get("emisor", "DESCONOCIDO"))
     p = escape_markdown(data.get("pagador", "S/N"))
     m = float(data.get("monto", 0) or 0)
-    op = escape_markdown(data.get("numero_operacion", "null"))
+    op = escape_markdown(data.get("numero_operacion", "null"), is_code=True)
     cat = escape_markdown(data.get("categoria", "Otros"))
     f = escape_markdown(data.get("fecha", ""))
     h = escape_markdown(data.get("hora", ""))
     dest = escape_markdown(data.get("destino", "N/D"))
     pa = escape_markdown(data.get("pais", "N/D"))
     ref = escape_markdown(data.get("referencia", ""))
-    mon = escape_markdown(data.get("moneda", "Soles"))
+    mon = escape_markdown(data.get("moneda", "Soles"), is_code=True)
     
     ticket = (
         "✅ *PAGO REGISTRADO EXITOSAMENTE*\n"
@@ -1096,9 +1164,9 @@ async def buscar_admin_command(update: Update, context: ContextTypes.DEFAULT_TYP
     for r in results[-10:]:
         p = escape_markdown(r.get("pagador", "S/N"))
         m = float(r.get("monto", 0) or 0)
-        ben = escape_markdown(r.get("_beneficiario_id", ""))
-        uname = escape_markdown(r.get("_username", ""))
-        op = escape_markdown(r.get("numero_operacion", "S/N"))
+        ben = escape_markdown(r.get("_beneficiario_id", ""), is_code=True)
+        uname = escape_markdown(r.get("_username", ""), is_code=True)
+        op = escape_markdown(r.get("numero_operacion", "S/N"), is_code=True)
         
         user_display = f"@{uname}" if uname and uname != "S/N" else f"ID: {ben}"
         txt += f"👤 *Pagador:* {p}\n└ S/ `{m:,.2f}` \\| Op: `{op}`\n└ 🏦 *Emisor:* `{user_display}`\n"
@@ -1223,7 +1291,10 @@ async def process_pending_queue(context: ContextTypes.DEFAULT_TYPE):
             
             if cap:
                 ref = str(data.get("referencia", "")).strip()
-                data["referencia"] = f"{cap} (IA: {ref})" if ref.lower() != "null" else cap
+                if ref and ref.lower() != "null":
+                    data["referencia"] = f"{cap} | {ref}"
+                else:
+                    data["referencia"] = cap
             
             if not data.get("numero_operacion"):
                 data["numero_operacion"] = "SYS-" + str(uuid.uuid4()).upper()[:6]
@@ -1235,8 +1306,9 @@ async def process_pending_queue(context: ContextTypes.DEFAULT_TYPE):
                 processed_ids.add(f_id)  # Marcar como procesado para que salga de la cola
                 continue
             
-            # Conversión de moneda (igual que en flujo normal activo)
-            monto = float(data.get("monto", 0) or 0)
+            # Limpieza y conversión de moneda
+            monto = _clean_numeric_value(data.get("monto"))
+            data["monto"] = monto # Normalizar a número limpio
             if data.get("moneda") == "Dólares":
                 rate = await asyncio.to_thread(get_exchange_rate)
                 data["monto_original"] = f"{monto} USD"

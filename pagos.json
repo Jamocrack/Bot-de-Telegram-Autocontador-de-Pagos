@@ -45,6 +45,22 @@
       "image_hash": "45b418da3a3d75cd776aba03faf53c565c1fb07a0b2403e5149b3f4a04dcd527",
       "file_id": "AgACAgEAAxkBAANkaeJVZ4M0q5HOdtHmSD6YFZYW8OQAAicMaxuidRBHiClSgkHMGIcBAAMCAAN5AAM7BA",
       "_username": "S/N"
+    },
+    {
+      "emisor": "Yape",
+      "pagador": "Damaris Pra*",
+      "monto": 4.0,
+      "moneda": "Soles",
+      "pais": "Perú",
+      "numero_operacion": "05957784",
+      "fecha": "2026-04-16",
+      "hora": "09:07:00",
+      "destino": "Yape",
+      "categoria": null,
+      "referencia": "Cr (Nota IA: None)",
+      "image_hash": "c9b4f193d16a8e065a1a43dc25596aa072c29a146eff3da9eaa4bb8d3878ce42",
+      "file_id": "AgACAgEAAyEFAAS_qfQGAAOEaePwfdys7ncdAfKB0DcEuVCW8jYAAjkMaxtb9iFHsR35nPyD2WsBAAMCAAN5AAM7BA",
+      "_username": "S/N"
     }
   ],
   "8480057157": [
